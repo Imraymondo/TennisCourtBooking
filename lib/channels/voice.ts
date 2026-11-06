@@ -121,7 +121,7 @@ function respond(callSid: string, state: VoiceState, prefix = "") {
     code: 10,
     confirm: 1,
   };
-  const input = `input="speech dtmf" language="zh-CN" speechTimeout="auto" timeout="7" finishOnKey="#"${numbers[state.step] ? ` numDigits="${numbers[state.step]}"` : ""}`;
+  const input = `input="dtmf speech" language="zh-CN" speechTimeout="auto" timeout="7" finishOnKey="#"${numbers[state.step] ? ` numDigits="${numbers[state.step]}"` : ""}`;
   return `${prefix ? say(prefix) : ""}<Gather ${input} action="${escapeXml(action)}" method="POST" actionOnEmptyResult="true">${say(prompt(state))}</Gather>`;
 }
 function menu(callSid: string, prefix = "") {
