@@ -8,3 +8,6 @@
 !.env.example
 npm-debug.log*
 .DS_Store
+/.data/
+/test-results/
+/playwright-report/

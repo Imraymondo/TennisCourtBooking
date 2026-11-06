@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: courtside-booking
+    runtime: node
+    plan: starter
+    region: singapore
+    branch: main
+    numInstances: 1
+    autoDeploy: false
+    buildCommand: npm ci --include=dev --no-fund && npm run check && npm test && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    disk:
+      name: courtside-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 24.22.1
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+      - key: BOOKING_DB_PATH
+        value: /var/data/bookings.sqlite
+      - key: ADMIN_PASSWORD
+        generateValue: true
