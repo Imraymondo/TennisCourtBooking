@@ -1,0 +1,365 @@
+import assert from "node:assert/strict";
+import { spawn, type ChildProcess } from "node:child_process";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer as createTcpServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, before, test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
+import type { Server } from "node:http";
+import type { Availability, Booking } from "../lib/domain";
+import { createVoiceRelay } from "../scripts/voice-relay.mjs";
+
+// Only local sockets are used. These stand-ins never contact Twilio or ngrok.
+const publicOrigin = "https://local-phone.example";
+const signingToken = "local-phone-test-key-not-a-real-credential";
+const receivingNumber = "+61255550100";
+const callingNumber = "+61400123456";
+const date = "2099-12-01";
+let directory: string | undefined;
+let app: ChildProcess | undefined;
+let appStopped: Promise<void> | undefined;
+let appSpawnFailed = false;
+let relay: Server | undefined;
+let appUrl: string;
+let relayUrl: string;
+
+async function freePort() {
+  const server = createTcpServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const port = address.port;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  return port;
+}
+
+function stopApp(signal: NodeJS.Signals) {
+  if (!app?.pid) return;
+  try {
+    if (process.platform === "win32") app.kill(signal);
+    else process.kill(-app.pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+}
+
+before(
+  async () => {
+    directory = await mkdtemp(join(tmpdir(), "courtside-local-phone-"));
+    const port = await freePort();
+    appUrl = `http://127.0.0.1:${port}`;
+    const environment = { ...process.env };
+    for (const name of Object.keys(environment)) {
+      if (
+        ["TWILIO_", "POSTMARK_", "NGROK_"].some((prefix) =>
+          name.startsWith(prefix),
+        )
+      )
+        environment[name] = "";
+    }
+    Object.assign(environment, {
+      NODE_ENV: "production",
+      NEXT_TELEMETRY_DISABLED: "1",
+      BOOKING_DB_PATH: join(directory, "bookings.sqlite"),
+      ADMIN_PASSWORD: randomBytes(24).toString("base64url"),
+      APP_BASE_URL: publicOrigin,
+      RENDER_EXTERNAL_URL: "",
+      TWILIO_ACCOUNT_SID: "",
+      TWILIO_AUTH_TOKEN: signingToken,
+      TWILIO_PHONE_NUMBER: receivingNumber,
+      POSTMARK_INBOUND_SECRET: "",
+      POSTMARK_SERVER_TOKEN: "",
+      POSTMARK_FROM_EMAIL: "",
+      POSTMARK_INBOUND_EMAIL: "",
+      NGROK_AUTHTOKEN: "",
+      NGROK_DOMAIN: "",
+    });
+    app = spawn(
+      process.execPath,
+      [
+        join(process.cwd(), "node_modules", "next", "dist", "bin", "next"),
+        "start",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        String(port),
+      ],
+      {
+        cwd: process.cwd(),
+        env: environment,
+        stdio: "ignore",
+        detached: process.platform !== "win32",
+      },
+    );
+    appStopped = new Promise<void>((resolve) => {
+      app!.once("exit", () => resolve());
+      app!.once("error", () => {
+        appSpawnFailed = true;
+        resolve();
+      });
+    });
+    const deadline = Date.now() + 30_000;
+    let ready = false;
+    while (Date.now() < deadline) {
+      if (appSpawnFailed || app.exitCode !== null || app.signalCode !== null)
+        throw new Error(
+          "Local phone test application failed to start; build the project first.",
+        );
+      try {
+        const response = await fetch(`${appUrl}/api/health`, {
+          signal: AbortSignal.timeout(1_000),
+        });
+        const body = (await response.json()) as { status?: string };
+        if (response.ok && body.status === "ok") {
+          ready = true;
+          break;
+        }
+      } catch {
+        /* bounded polling while the production process starts */
+      }
+      await delay(100);
+    }
+    assert.ok(ready, "production application must become ready");
+    relay = createVoiceRelay({ upstreamPort: port });
+    await new Promise<void>((resolve, reject) => {
+      relay!.once("error", reject);
+      relay!.listen(0, "127.0.0.1", resolve);
+    });
+    const address = relay.address();
+    assert.ok(address && typeof address !== "string");
+    assert.equal(address.address, "127.0.0.1");
+    relayUrl = `http://127.0.0.1:${address.port}`;
+  },
+  { timeout: 40_000 },
+);
+
+after(
+  async () => {
+    try {
+      if (relay) {
+        relay.closeAllConnections();
+        if (relay.listening)
+          await new Promise<void>((resolve, reject) =>
+            relay!.close((error) => (error ? reject(error) : resolve())),
+          );
+      }
+    } finally {
+      try {
+        if (
+          app &&
+          appStopped &&
+          app.exitCode === null &&
+          app.signalCode === null &&
+          !appSpawnFailed
+        ) {
+          stopApp("SIGTERM");
+          await Promise.race([
+            appStopped,
+            delay(3_000, undefined, { ref: false }),
+          ]);
+          if (app.exitCode === null && app.signalCode === null) {
+            stopApp("SIGKILL");
+            await Promise.race([
+              appStopped,
+              delay(2_000, undefined, { ref: false }),
+            ]);
+          }
+        }
+      } finally {
+        if (directory) await rm(directory, { recursive: true, force: true });
+      }
+    }
+  },
+  { timeout: 10_000 },
+);
+
+type Turn = { path: string; fields: Record<string, string> };
+
+async function signedTurn(turn: Turn, validSignature = true) {
+  const material =
+    publicOrigin +
+    turn.path +
+    Object.keys(turn.fields)
+      .sort()
+      .map((key) => key + turn.fields[key])
+      .join("");
+  const signature = createHmac("sha1", signingToken)
+    .update(material)
+    .digest("base64");
+  const response = await fetch(relayUrl + turn.path, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded; charset=utf-8",
+      "x-twilio-signature": validSignature
+        ? signature
+        : "invalid-local-test-signature",
+    },
+    body: new URLSearchParams(turn.fields).toString(),
+    signal: AbortSignal.timeout(5_000),
+  });
+  return { response, text: await response.text() };
+}
+
+async function publicSchedule(): Promise<Availability> {
+  const response = await fetch(`${appUrl}/api/availability?date=${date}`, {
+    signal: AbortSignal.timeout(5_000),
+  });
+  assert.equal(response.status, 200);
+  return response.json() as Promise<Availability>;
+}
+
+test("the local-only phone relay hides website and staff routes and the real handler rejects forged signatures", async () => {
+  for (const path of ["/", "/admin", "/api/bookings", "/api/admin/session"]) {
+    const response = await fetch(relayUrl + path, {
+      signal: AbortSignal.timeout(5_000),
+    });
+    assert.equal(
+      response.status,
+      404,
+      "website and staff endpoints must not cross the phone relay",
+    );
+  }
+  const forged = await signedTurn(
+    {
+      path: "/api/webhooks/voice",
+      fields: {
+        CallSid: "CA" + randomUUID().replaceAll("-", ""),
+        From: callingNumber,
+        To: receivingNumber,
+      },
+    },
+    false,
+  );
+  assert.equal(forged.response.status, 403);
+  assert.equal(forged.response.headers.get("set-cookie"), null);
+  const schedule = await publicSchedule();
+  assert.equal(schedule.courts.flatMap((court) => court.bookings).length, 0);
+});
+
+test("signed speech crosses the real relay and production app, requires confirmation and persists exactly one private-contact booking", async () => {
+  const callSid = "CA" + randomUUID().replaceAll("-", "");
+  let path = "/api/webhooks/voice";
+  const speak = async (speech = "") => {
+    const turn: Turn = {
+      path,
+      fields: {
+        CallSid: callSid,
+        From: callingNumber,
+        To: receivingNumber,
+        CallStatus: "in-progress",
+        Digits: "",
+        SpeechResult: speech,
+      },
+    };
+    const result = await signedTurn(turn);
+    assert.equal(
+      result.response.status,
+      200,
+      "a locally signed speech turn must reach the production handler",
+    );
+    assert.match(
+      result.response.headers.get("content-type") || "",
+      /text\/xml/,
+    );
+    assert.equal(result.response.headers.get("cache-control"), "no-store");
+    assert.equal(result.response.headers.get("set-cookie"), null);
+    const action = result.text.match(/<Gather\b[^>]*action="([^"]+)"/)?.[1];
+    assert.ok(
+      action,
+      "the speech response must contain a next-step Gather callback",
+    );
+    const callback = new URL(action.replaceAll("&amp;", "&"));
+    assert.equal(
+      callback.origin,
+      publicOrigin,
+      "callbacks use the configured HTTPS origin rather than the private upstream address",
+    );
+    assert.equal(callback.pathname, "/api/webhooks/voice");
+    assert.match(callback.searchParams.get("turn") || "", /^[a-f0-9-]{36}$/);
+    path = callback.pathname + callback.search;
+    return { ...result, turn };
+  };
+  assert.match((await speak()).text, /欢迎使用/);
+  assert.match((await speak("我要预约")).text, /哪一天/);
+  assert.match((await speak("2099年12月1日")).text, /选择一号球场或二号球场/);
+  assert.match((await speak("一号球场")).text, /几点开始/);
+  assert.match((await speak("下午三点")).text, /几个小时/);
+  assert.match((await speak("默认")).text, /预约人的姓名/);
+  assert.match((await speak("我叫张三")).text, /联系电话/);
+  const confirm = await speak("使用来电号码");
+  assert.match(confirm.text, /确认无误/);
+  assert.match(confirm.text, /姓名将公开展示/);
+  assert.equal(
+    (await publicSchedule()).courts.flatMap((court) => court.bookings).length,
+    0,
+    "gathering details must not reserve a court before explicit confirmation",
+  );
+
+  const committed = await speak("确认预约");
+  assert.match(committed.text, /网站日程已更新/);
+  const schedule = await publicSchedule();
+  const bookings = schedule.courts.flatMap((court) => court.bookings);
+  assert.equal(bookings.length, 1);
+  const booking = bookings[0];
+  assert.equal(booking.customerName, "张三");
+  assert.equal(booking.courtId, 1);
+  assert.equal(
+    Date.parse(booking.endsAt) - Date.parse(booking.startsAt),
+    7_200_000,
+  );
+  const serialized = JSON.stringify(schedule);
+  assert.ok(
+    !serialized.includes(callingNumber),
+    "public web schedules omit telephone contact details",
+  );
+  assert.ok(
+    !serialized.includes("phone") &&
+      !serialized.includes("email") &&
+      !serialized.includes("accessCode"),
+  );
+
+  const replay = await signedTurn(committed.turn);
+  assert.equal(replay.response.status, 200);
+  assert.equal(
+    replay.text,
+    committed.text,
+    "provider retries replay the same response including its opaque next-turn URL",
+  );
+  assert.equal(
+    (await publicSchedule()).courts.flatMap((court) => court.bookings).length,
+    1,
+    "replaying the confirmation must not duplicate a booking",
+  );
+
+  const accessCode = committed.text
+    .match(/管理码：([^。]+)/)?.[1]
+    .replaceAll("，", "");
+  assert.ok(
+    accessCode && /^\d{10}$/.test(accessCode),
+    "the caller receives a private spoken management code",
+  );
+  assert.ok(
+    !serialized.includes(accessCode),
+    "the management code never appears in the public schedule",
+  );
+  const lookup = await fetch(`${appUrl}/api/bookings/lookup`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: appUrl },
+    body: JSON.stringify({ id: booking.id, accessCode }),
+    signal: AbortSignal.timeout(5_000),
+  });
+  assert.equal(lookup.status, 200);
+  const privateBooking = ((await lookup.json()) as { booking: Booking })
+    .booking;
+  assert.equal(privateBooking.source, "phone");
+  assert.equal(privateBooking.phone, callingNumber);
+  assert.equal(privateBooking.durationHours, 2);
+  assert.equal(privateBooking.customerName, "张三");
+});

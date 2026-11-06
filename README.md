@@ -24,6 +24,18 @@ npm run dev
 
 未配置外部服务时，网页预约功能仍可完整使用，电话、短信和邮件显示待配置；接口不会绕过认证。
 
+### 不部署网站，直接用自己的电脑接听电话
+
+支持本机网站和数据库配合临时HTTPS隧道，只转发Twilio电话回调，首页和后台不通过隧道公开。填好本机 `.env.local` 中已有的 `TWILIO_AUTH_TOKEN`、`TWILIO_PHONE_NUMBER`，再添加自己的 `NGROK_AUTHTOKEN`：
+
+```bash
+npm ci --include=dev
+npm run phone:check
+npm run phone:local
+```
+
+将命令实际输出的VoiceWebhook地址填入Twilio号码的来电配置，选择POST，再拨打该号码。无需Render账号或购买域名；保持电脑和终端运行。详见[本机真实电话接入步骤](docs/local-phone.md)。
+
 ### 工作人员密码
 
 开发模式首次访问后台时，在 `.data/admin-password` 自动生成随机密码。请在自己的终端查看该本地文件登录，不要提交或分享。也可在未跟踪的 `.env.local` 中设置至少12位的 `ADMIN_PASSWORD`。
@@ -42,6 +54,8 @@ npm run dev
 | -------------------------- | ---------------------------------------- |
 | `npm ci`                   | 按锁文件安装                             |
 | `npm run dev`              | 开发服务                                 |
+| `npm run phone:check`      | 检查本机电话配置，不联网、不显示凭据值   |
+| `npm run phone:local`      | 启动本机网站和仅转发电话回调的临时隧道   |
 | `npm run check`            | ESLint与TypeScript                       |
 | `npm test`                 | 业务、时区、并发、持久化和渠道测试       |
 | `npm run build`            | 生产构建                                 |

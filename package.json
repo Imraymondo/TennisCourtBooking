@@ -9,13 +9,15 @@
   "packageManager": "npm@11.9.0",
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0",
+    "phone:check": "node scripts/phone-local.mjs --check",
+    "phone:local": "node scripts/phone-local.mjs",
     "build": "next build",
     "start": "node scripts/start-production.mjs",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "next typegen && tsc --noEmit",
     "check": "npm run lint && npm run typecheck",
     "test": "node --import tsx --test tests/*.test.ts",
-    "test:integration": "node --import tsx --test tests/api.integration.ts tests/deployment.integration.ts"
+    "test:integration": "node --import tsx --test tests/api.integration.ts tests/deployment.integration.ts tests/local-phone.integration.ts"
   },
   "dependencies": {
     "@js-temporal/polyfill": "0.5.1",
@@ -24,6 +26,7 @@
     "react-dom": "19.3.1"
   },
   "devDependencies": {
+    "@ngrok/ngrok": "1.7.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
