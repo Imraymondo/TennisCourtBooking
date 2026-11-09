@@ -1,10 +1,20 @@
-import { handleVoice, recoverVoiceTurn } from "@/lib/channels/voice";
+import {
+  handleVoice,
+  recoverVoiceTurn,
+  voiceProgress,
+} from "@/lib/channels/voice";
+import { logVoiceCallback } from "@/lib/channels/voice-diagnostics";
 import {
   verifiedTwilioForm,
   webhookFailure,
   xmlResponse,
 } from "@/lib/channels/security";
-import { AppError, rateLimit, runChannelEvent } from "@/lib/store";
+import {
+  AppError,
+  getChannelEvent,
+  rateLimit,
+  runChannelEvent,
+} from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,24 +31,37 @@ export async function POST(request: Request) {
     const recovery =
       (!turn && Boolean(digits.trim() || speech.trim())) ||
       Boolean(turn && !/^[a-f0-9-]{36}$/.test(turn));
-    if (process.env.VOICE_DEBUG === "1") {
-      console.info(
-        "Voice callback:",
-        JSON.stringify({
-          turn: turn ? "present" : "missing",
-          input: speech.trim() ? "speech" : digits.trim() ? "digits" : "empty",
-          handling: recovery ? "recovery" : "routed",
-        }),
-      );
-    }
+    const diagnostic = process.env.VOICE_DEBUG === "1";
+    const before = diagnostic ? voiceProgress(callSid) : null;
     if (recovery) {
       rateLimit(`voice:${form.get("From")}`, 200, 3_600_000);
-      return xmlResponse(recoverVoiceTurn(callSid));
+      const xml = recoverVoiceTurn(callSid);
+      if (diagnostic)
+        logVoiceCallback(form, {
+          turn,
+          before,
+          after: voiceProgress(callSid),
+          handling: "recovery",
+          cached: false,
+          responseXml: xml,
+        });
+      return xmlResponse(xml);
     }
-    const xml = runChannelEvent(`voice:${callSid}:${turn ?? "initial"}`, () => {
+    const key = `voice:${callSid}:${turn ?? "initial"}`;
+    const cached = diagnostic && getChannelEvent(key) !== null;
+    const xml = runChannelEvent(key, () => {
       rateLimit(`voice:${form.get("From")}`, 200, 3_600_000);
       return handleVoice(callSid, form.get("From")!, turn, digits, speech);
     });
+    if (diagnostic)
+      logVoiceCallback(form, {
+        turn,
+        before,
+        after: voiceProgress(callSid),
+        handling: "routed",
+        cached,
+        responseXml: xml,
+      });
     return xmlResponse(xml);
   } catch (error) {
     return webhookFailure(error);

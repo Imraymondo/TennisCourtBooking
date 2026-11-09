@@ -11,6 +11,7 @@
     "dev": "next dev --hostname 0.0.0.0",
     "phone:check": "node scripts/phone-local.mjs --check",
     "phone:local": "node scripts/phone-local.mjs",
+    "phone:diagnose": "node scripts/phone-local.mjs --diagnose",
     "build": "next build",
     "start": "node scripts/start-production.mjs",
     "lint": "eslint . --max-warnings=0",

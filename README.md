@@ -56,6 +56,7 @@ npm run phone:local
 | `npm run dev`              | 开发服务                                 |
 | `npm run phone:check`      | 检查本机电话配置，不联网、不显示凭据值   |
 | `npm run phone:local`      | 启动本机网站和仅转发电话回调的临时隧道   |
+| `npm run phone:diagnose`   | 启动电话服务并输出不含语音原文的诊断状态 |
 | `npm run check`            | ESLint与TypeScript                       |
 | `npm test`                 | 业务、时区、并发、持久化和渠道测试       |
 | `npm run build`            | 生产构建                                 |

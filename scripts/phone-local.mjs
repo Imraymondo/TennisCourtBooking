@@ -49,8 +49,12 @@ if (
     "NGROK_DOMAIN must be a hostname from your ngrok account, without scheme or path.",
   );
 }
-if (process.argv.slice(2).some((argument) => argument !== "--check"))
-  errors.push("The only optional command argument is --check.");
+if (
+  process.argv
+    .slice(2)
+    .some((argument) => !["--check", "--diagnose"].includes(argument))
+)
+  errors.push("Supported command arguments are --check and --diagnose.");
 if (errors.length) {
   for (const error of errors) console.error(error);
   console.error("See docs/local-phone.md. Never paste credentials into chat.");
@@ -154,6 +158,9 @@ try {
     const childEnvironment = {
       ...process.env,
       NODE_ENV: "development",
+      VOICE_DEBUG: process.argv.includes("--diagnose")
+        ? "1"
+        : process.env.VOICE_DEBUG || "0",
       APP_BASE_URL: external.origin,
       BOOKING_DB_PATH: resolve(
         root,
@@ -221,6 +228,10 @@ try {
       if (warm.status !== 403)
         throw new Error("Voice signature validation is not ready");
       console.log(`Local website: http://127.0.0.1:${webPort}`);
+      if (childEnvironment.VOICE_DEBUG === "1")
+        console.log(
+          "Voice diagnostics enabled: callback metadata only; speech text and contact details are never printed.",
+        );
       console.log(
         `Twilio Voice webhook (POST): ${external.origin}/api/webhooks/voice`,
       );

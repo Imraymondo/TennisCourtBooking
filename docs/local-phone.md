@@ -106,14 +106,18 @@ npm run phone:local
 
 程序支持“预定”“预订”“预约”及其繁体写法。升级代码后，先用原来的 `phone:local` 终端按 Ctrl+C 停止，再运行 `git pull` 和 `npm run phone:local`。如果使用下载的源码包，请更新程序文件并保留原来的 `.env.local` 和 `.data`。隧道地址如改变，更新Twilio号码的Voice POST回调地址。
 
-需要进一步排查时，在本机 `.env.local` 添加 `VOICE_DEBUG=1` 并重启。终端只输出以下类型的脱敏信息：
+需要进一步排查时，停止旧服务并运行 `npm run phone:diagnose`。它使用同样的本机隧道流程，自动打开脱敏诊断，不需要改写密钥或配置文件。也可继续在 `.env.local` 使用 `VOICE_DEBUG=1`。终端仅输出路由、识别字段状态及步骤等元数据，不输出实际语音、电话号码或管理码。
 
 ```text
-Voice callback: {"turn":"present","input":"speech","handling":"routed"}
+Voice callback: {"version":"mandarin-gather-2","turn":"present","input":"speech","handling":"routed", ...}
 ```
 
 - `input=speech` 表示服务器收到语音识别结果；`input=empty` 表示本轮没有收到有效语音或按键。
 - `turn=present` 表示收到会话标识；`handling=recovery` 表示回调缺少或带错会话标识，程序只重问当前问题，不会提交或重置预约。
+- `speechField` 区分最终识别字段缺失、空白或有内容；`speechLength` 只显示字符数。`confidence` 是服务商返回的置信度（可能不提供）。`partialFieldPresent` 仅提示部分结果存在，部分结果不会当作最终确认。
+- `stepBefore`、`stepAfter` 显示实际步骤。“按2后说我要预约明天”在最终中文识别正常时，应从 `date` 进入 `court`，`dateRecognized=true`。
+- 普通话采集配置使用 `configuredLanguage=cmn-Hans-CN`，`responseLanguage` 表示实际返回的Gather语言；播报则使用Polly的 `cmn-CN`。两个接口的语言代码不同。依据为官方发布的Twilio SDK 6.3.0 `GatherLanguage`；没有擅自指定未经验证的识别模型。
+- 如 `cached=true` 且 `responseLanguage=zh-CN`，说明旧通话重试拿到了升级前的缓存响应，请挂断后重新拨号，不要删除预约数据库。
 - 正常后续请求应使用程序返回的Gather action地址，其中带 `?turn=...`，不要将后续步骤手工重定向到初始欢迎地址。
 
 可以提供这些状态、错误码和 `git rev-parse --short HEAD` 输出的版本号，不需要发送Auth Token、实际语音转写、管理码或客户联系方式。

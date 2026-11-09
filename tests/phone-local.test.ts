@@ -102,6 +102,13 @@ test("valid fake settings pass a non-network check without revealing any values"
   assertPrivate(result.output);
 });
 
+test("check takes precedence over diagnose without opening connections or exposing settings", () => {
+  const result = check({}, ["--check", "--diagnose"]);
+  assert.equal(result.status, 0, result.output);
+  assert.ok(result.output.includes("does not connect"));
+  assertPrivate(result.output);
+});
+
 test("invalid phone input is rejected without echoing the supplied value", () => {
   const phone = "private-invalid-phone-do-not-display";
   const result = check({ TWILIO_PHONE_NUMBER: phone });
@@ -147,6 +154,6 @@ test("unsupported Node versions and unknown flags stop without showing settings"
   assertPrivate(oldNode.output);
   const unknown = check({}, ["--check", "--unknown"]);
   assert.equal(unknown.status, 1);
-  assert.ok(unknown.output.includes("only optional command argument"));
+  assert.ok(unknown.output.includes("Supported command arguments"));
   assertPrivate(unknown.output);
 });

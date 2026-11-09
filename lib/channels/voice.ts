@@ -14,6 +14,7 @@ import {
 import { bookingTimes, todayLocal } from "@/lib/time";
 import { availabilityReply, bookingSummary } from "./commands";
 import { baseUrl, channelError, escapeXml } from "./security";
+import { VOICE_CAPTURE } from "./voice-capture";
 import {
   explicitConfirmation,
   isOffTopic,
@@ -120,8 +121,10 @@ function renderGather(state: VoiceState, prefix = "", promptState = state) {
     code: 10,
     confirm: 1,
   };
-  const input = `input="dtmf speech" language="zh-CN" speechTimeout="auto" timeout="7" finishOnKey="#"${numbers[state.step] ? ` numDigits="${numbers[state.step]}"` : ""}`;
-  return `${prefix ? say(prefix) : ""}<Gather ${input} action="${escapeXml(action)}" method="POST" actionOnEmptyResult="true">${say(prompt(promptState))}</Gather>`;
+  const input = `input="dtmf speech" language="${VOICE_CAPTURE.language}" speechTimeout="${VOICE_CAPTURE.speechPauseSeconds}" timeout="${VOICE_CAPTURE.startTimeoutSeconds}" finishOnKey="#"${numbers[state.step] ? ` numDigits="${numbers[state.step]}"` : ""}`;
+  // Keep all spoken guidance inside Gather so the caller is heard while an
+  // availability explanation or a recovery prompt is being read.
+  return `<Gather ${input} action="${escapeXml(action)}" method="POST" actionOnEmptyResult="true">${prefix ? say(prefix) : ""}${say(prompt(promptState))}</Gather>`;
 }
 function respond(callSid: string, state: VoiceState, prefix = "") {
   const next = { ...state, turn: randomUUID(), introduced: true };
@@ -162,6 +165,12 @@ function currentVoiceState(callSid: string): VoiceState | null {
   } catch {
     return null;
   }
+}
+export function voiceProgress(
+  callSid: string,
+): { step: Step; turn: string } | null {
+  const state = currentVoiceState(callSid);
+  return state ? { step: state.step, turn: state.turn } : null;
 }
 // An incomplete callback may repeat a question, but must never consume a
 // confirmation against a newer state or replay the cached initial greeting.
