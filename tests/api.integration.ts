@@ -335,6 +335,52 @@ test("overlaps return 409 while adjacent bookings and the other court remain ava
   assert.equal(schedule.courts[1].bookings.length, 1);
 });
 
+test("hourly occupancy keeps a one-hour gap open without permitting a two-hour overlap", async () => {
+  const date = "2031-02-01";
+  await create(input(`${date}T08:00`));
+  const schedule = await availability(date);
+  const hour = (time: string, courtId = 1) => {
+    const slot = schedule.slots.find(
+      (candidate) =>
+        candidate.courtId === courtId &&
+        candidate.startLocal === `${date}T${time}`,
+    );
+    assert.ok(slot);
+    return slot;
+  };
+  assert.equal(hour("07:00").occupied, false);
+  assert.equal(hour("07:00").maxDurationHours, 1);
+  assert.equal(hour("07:00").available, false);
+  for (const time of ["08:00", "09:00"]) {
+    assert.equal(hour(time).occupied, true);
+    assert.equal(hour(time).maxDurationHours, 0);
+    assert.equal(hour(time).available, false);
+  }
+  assert.equal(hour("10:00").available, true);
+  assert.equal(hour("07:00", 2).available, true);
+
+  const oneHour = await api<Availability>(
+    `/api/availability?date=${date}&durationHours=1`,
+  );
+  assert.equal(oneHour.response.status, 200);
+  assert.equal(
+    oneHour.body.slots.find(
+      (slot) => slot.courtId === 1 && slot.startLocal === `${date}T07:00`,
+    )?.available,
+    true,
+  );
+  const conflict = await api("/api/bookings", {
+    body: { ...input(`${date}T07:00`), durationHours: 2 },
+  });
+  assert.equal(conflict.response.status, 409);
+  const adjacent = await create({
+    ...input(`${date}T07:00`),
+    durationHours: 1,
+  });
+  assert.equal(adjacent.booking.durationHours, 1);
+  assert.equal(adjacent.booking.status, "confirmed");
+});
+
 test("overnight bookings block the following day and appear in its public schedule", async () => {
   const created = await create(input("2030-02-13T23:00"));
   const conflict = await api("/api/bookings", {

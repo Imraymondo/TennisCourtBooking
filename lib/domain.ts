@@ -41,6 +41,10 @@ export type AvailabilitySlot = {
   startsAt?: string;
   endsAt?: string;
   available: boolean;
+  // Actual occupancy of this one-hour cell is separate from whether a booking
+  // of the selected duration can start here.
+  occupied: boolean;
+  maxDurationHours: number;
   reason?: string;
 };
 export type Availability = {

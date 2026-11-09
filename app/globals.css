@@ -383,6 +383,7 @@ h1 span {
 }
 .schedule-legend {
   display: flex;
+  flex-wrap: wrap;
   gap: 18px;
   align-items: center;
   margin-top: 18px;
@@ -410,7 +411,11 @@ h1 span {
   background: #f5f8e9;
 }
 .legend-booked {
-  background: #e7e8df;
+  background: #eadfd5;
+  border: 1px solid #cdb79f;
+}
+.legend-unavailable {
+  background: #eeefe7;
   border: 1px solid #d8dcd0;
 }
 .court-grid {
@@ -488,6 +493,12 @@ h1 span {
   gap: 7px;
 }
 .time-slots button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 43px;
   padding: 10px 3px;
   color: #3e613b;
   background: #f4f8e9;
@@ -505,6 +516,19 @@ h1 span {
   background: #eeefe7;
   border-color: #e1e4da;
   text-decoration: line-through;
+}
+.time-slots button.slot-occupied:disabled {
+  color: #795b45;
+  background: #eadfd5;
+  border-color: #d5c0aa;
+}
+.time-slots button.slot-short {
+  border-style: dashed;
+}
+.slot-capacity {
+  font-size: 8px;
+  font-weight: 500;
+  line-height: 1.1;
 }
 .day-bookings {
   padding: 20px 23px;

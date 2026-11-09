@@ -214,6 +214,14 @@ export default function BookingHome({ today }: { today: string }) {
     availability?.date === date && availability.durationHours === duration
       ? availability
       : null;
+  const editorSlot =
+    mode === "create"
+      ? currentData?.slots.find(
+          (slot) =>
+            slot.courtId === editor.courtId &&
+            slot.startLocal === editor.startLocal,
+        )
+      : undefined;
   function chooseDate(value: string) {
     if (value === date) return;
     setDate(value);
@@ -223,10 +231,11 @@ export default function BookingHome({ today }: { today: string }) {
     setRefresh((value) => value + 1);
   }
   function openCreate(slot: AvailabilitySlot) {
+    const bookingDuration = Math.min(duration, slot.maxDurationHours);
     setEditor({
       courtId: slot.courtId,
       startLocal: slot.startLocal,
-      durationHours: duration,
+      durationHours: bookingDuration,
       customerName: "",
       phone: "",
       email: "",
@@ -234,7 +243,11 @@ export default function BookingHome({ today }: { today: string }) {
     setError("");
     setResult(null);
     setManaged(null);
-    setNotice("");
+    setNotice(
+      bookingDuration < duration
+        ? `该时段只有 ${slot.maxDurationHours} 小时连续空闲，已为你选择 ${bookingDuration} 小时；当前选择的 ${duration} 小时无法连续安排。请确认时长后提交预约。`
+        : "",
+    );
     setCancelConfirm(false);
     setMode("create");
   }
@@ -275,6 +288,7 @@ export default function BookingHome({ today }: { today: string }) {
         body: JSON.stringify(editor),
       });
       setResult(created);
+      setNotice("");
       refreshAvailability();
     } catch (error) {
       setError(error instanceof Error ? error.message : "预订未完成，请重试。");
@@ -376,9 +390,10 @@ export default function BookingHome({ today }: { today: string }) {
             <select
               aria-label="场地"
               value={editor.courtId}
-              onChange={(event) =>
-                setEditor({ ...editor, courtId: Number(event.target.value) })
-              }
+              onChange={(event) => {
+                setEditor({ ...editor, courtId: Number(event.target.value) });
+                setNotice("");
+              }}
             >
               {COURTS.map((court) => (
                 <option value={court.id} key={court.id}>
@@ -400,11 +415,20 @@ export default function BookingHome({ today }: { today: string }) {
               }
             >
               {Array.from({ length: 8 }, (_, i) => (
-                <option key={i + 1} value={i + 1}>
+                <option
+                  key={i + 1}
+                  value={i + 1}
+                  disabled={!!editorSlot && i + 1 > editorSlot.maxDurationHours}
+                >
                   {i + 1} 小时
                 </option>
               ))}
             </select>
+            {editorSlot && (
+              <span className="field-hint">
+                该开始时间最多可连续预约 {editorSlot.maxDurationHours} 小时
+              </span>
+            )}
           </label>
         </div>
         <label>
@@ -416,9 +440,10 @@ export default function BookingHome({ today }: { today: string }) {
             step="3600"
             min={`${today}T00:00`}
             value={editor.startLocal}
-            onChange={(event) =>
-              setEditor({ ...editor, startLocal: event.target.value })
-            }
+            onChange={(event) => {
+              setEditor({ ...editor, startLocal: event.target.value });
+              setNotice("");
+            }}
             required
           />
         </label>
@@ -614,12 +639,17 @@ export default function BookingHome({ today }: { today: string }) {
           </div>
           <div className="schedule-legend">
             <span>
-              <i className="legend-free" /> 可预订
+              <i className="legend-free" /> 空闲（每格 1 小时）
             </span>
             <span>
-              <i className="legend-booked" /> 已占用 / 不可预订
+              <i className="legend-booked" /> 已预约
             </span>
-            <span>按钮表示开始时间，连续预订 {duration} 小时</span>
+            <span>
+              <i className="legend-unavailable" /> 已过期 / 不可预订
+            </span>
+            <span>
+              计划预约 {duration} 小时；连续空闲不足时，可选择较短时长
+            </span>
           </div>
         </div>
         {loadError && (
@@ -683,26 +713,50 @@ export default function BookingHome({ today }: { today: string }) {
                     <div className="slots-label">
                       <h4>选择开始时间</h4>
                       <span>
-                        {slots.filter((slot) => slot.available).length}{" "}
-                        个时段可选
+                        {
+                          slots.filter((slot) => slot.maxDurationHours >= 1)
+                            .length
+                        }{" "}
+                        个整点空闲
                       </span>
                     </div>
                     <div className="time-slots">
-                      {slots.map((slot) => (
-                        <button
-                          key={slot.startLocal}
-                          disabled={!slot.available || loading || !!loadError}
-                          title={
-                            slot.available
-                              ? `预订 ${duration} 小时`
-                              : slot.reason || "该时段不可预订"
-                          }
-                          aria-label={`${court.name} ${slot.startLocal.slice(11)} ${slot.available ? `预订${duration}小时` : "不可预订"}`}
-                          onClick={() => openCreate(slot)}
-                        >
-                          {slot.startLocal.slice(11)}
-                        </button>
-                      ))}
+                      {slots.map((slot) => {
+                        const free = slot.maxDurationHours >= 1;
+                        const shorter = free && !slot.available;
+                        const description = free
+                          ? shorter
+                            ? `空闲，最多可连续预约 ${slot.maxDurationHours} 小时，当前 ${duration} 小时不足`
+                            : `空闲，可预约 ${duration} 小时`
+                          : slot.occupied
+                            ? "已预约"
+                            : slot.reason || "不可预订";
+                        return (
+                          <button
+                            key={slot.startLocal}
+                            className={
+                              free
+                                ? shorter
+                                  ? "slot-short"
+                                  : "slot-free"
+                                : slot.occupied
+                                  ? "slot-occupied"
+                                  : "slot-unavailable"
+                            }
+                            disabled={!free || loading || !!loadError}
+                            title={description}
+                            aria-label={`${court.name} ${slot.startLocal.slice(11)} ${description}`}
+                            onClick={() => openCreate(slot)}
+                          >
+                            <span>{slot.startLocal.slice(11)}</span>
+                            {shorter && (
+                              <small className="slot-capacity">
+                                仅 {slot.maxDurationHours}h
+                              </small>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                   <div className="day-bookings">
@@ -940,7 +994,14 @@ export default function BookingHome({ today }: { today: string }) {
                 我知悉预约人姓名将在公开日程中显示，并确认预约信息准确。
               </span>
             </label>
-            <button className="primary-button form-submit" disabled={busy}>
+            <button
+              className="primary-button form-submit"
+              disabled={
+                busy ||
+                (!!editorSlot &&
+                  editor.durationHours > editorSlot.maxDurationHours)
+              }
+            >
               {busy ? "正在确认时段…" : "确认预约"}
               <Arrow />
             </button>

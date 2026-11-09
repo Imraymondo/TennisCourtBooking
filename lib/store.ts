@@ -330,32 +330,66 @@ export function getAvailability(
   const date = validateDate(dateValue);
   validateDuration(durationHours);
   const bounds = dayBounds(date);
-  const active = (
+  const dayStart = Date.parse(bounds.startsAt);
+  const dayEnd = Date.parse(bounds.endsAt);
+  // A late-night start can run into tomorrow. Load the full supported eight-hour
+  // horizon once so both occupancy and duration checks use the same snapshot.
+  const horizon = new Date(dayEnd + 8 * 3_600_000).toISOString();
+  const nearby = (
     getDatabase()
       .prepare(
         "SELECT * FROM bookings WHERE status = 'confirmed' AND starts_at < ? AND ends_at > ? ORDER BY starts_at",
       )
-      .all(bounds.endsAt, bounds.startsAt) as Row[]
+      .all(horizon, bounds.startsAt) as Row[]
   ).map(toBooking);
+  const active = nearby.filter(
+    (booking) =>
+      Date.parse(booking.startsAt) < dayEnd &&
+      Date.parse(booking.endsAt) > dayStart,
+  );
+  const now = Date.now();
   const slots = COURTS.flatMap((court) =>
     Array.from({ length: 24 }, (_, hour) => {
       const startLocal = `${date}T${String(hour).padStart(2, "0")}:00`;
       try {
         const times = bookingTimes(startLocal, durationHours, false);
-        const past = Date.parse(times.startsAt) <= Date.now();
-        // Query beyond the displayed day too: a 23:00 start may overlap tomorrow.
-        const conflict = getDatabase()
-          .prepare(
-            "SELECT id FROM bookings WHERE court_id = ? AND status = 'confirmed' AND starts_at < ? AND ends_at > ? LIMIT 1",
-          )
-          .get(court.id, times.endsAt, times.startsAt);
+        const startsAt = Date.parse(times.startsAt);
+        const past = startsAt <= now;
+        const overlaps = (hours: number) => {
+          const endsAt = startsAt + hours * 3_600_000;
+          return nearby.some(
+            (booking) =>
+              booking.courtId === court.id &&
+              Date.parse(booking.startsAt) < endsAt &&
+              Date.parse(booking.endsAt) > startsAt,
+          );
+        };
+        // Occupancy describes this hour itself, independently of the duration
+        // selected in the booking form. Intervals remain half-open [start, end).
+        const occupied = overlaps(1);
+        let maxDurationHours = 0;
+        if (!past) {
+          for (let hours = 1; hours <= 8; hours++) {
+            if (overlaps(hours)) break;
+            maxDurationHours = hours;
+          }
+        }
+        const available = !past && maxDurationHours >= durationHours;
         return {
           courtId: court.id,
           startLocal,
           startsAt: times.startsAt,
           endsAt: times.endsAt,
-          available: !past && !conflict,
-          reason: past ? "已过去" : conflict ? "已有预约" : undefined,
+          available,
+          occupied,
+          maxDurationHours,
+          reason: past
+            ? "已过去"
+            : occupied
+              ? "已有预约"
+              : !available
+                ? `空闲不足${durationHours}小时`
+                : undefined,
         };
       } catch (error) {
         if (!(error instanceof AppError)) throw error;
@@ -363,6 +397,8 @@ export function getAvailability(
           courtId: court.id,
           startLocal,
           available: false,
+          occupied: false,
+          maxDurationHours: 0,
           reason: "夏令时无效或重复整点",
         };
       }
