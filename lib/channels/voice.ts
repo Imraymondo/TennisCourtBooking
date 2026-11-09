@@ -54,6 +54,7 @@ type VoiceState = {
   code?: string;
   version?: number;
   silences?: number;
+  introduced?: boolean;
 };
 
 function say(text: string) {
@@ -82,7 +83,7 @@ function stateSummary(state: VoiceState) {
 function prompt(state: VoiceState): string {
   switch (state.step) {
     case "menu":
-      return "欢迎使用网球场预约助手。我只处理球场预约。您可以说我要预约、查询空闲时间、修改预约或取消预约。也可以按1查询，按2预订，按3修改，按4取消，按5查看预约。所有时间均为悉尼时间。";
+      return `${state.introduced ? "" : "欢迎使用网球场预约助手。我只处理球场预约。所有时间均为悉尼时间。"}请告诉我您想预定球场、查询空闲时间、修改还是取消预约。也可以按1查询，按2预订，按3修改，按4取消，按5查看。`;
     case "date":
       return "您希望哪一天使用球场？可以说具体日期、明天或后天，也可以输入八位日期。";
     case "court":
@@ -107,10 +108,8 @@ function prompt(state: VoiceState): string {
         : `${state.action === "change" ? "即将修改预约。" : "请核对，姓名将公开展示。"}预约人${state.name}，联系电话${spokenDigits(state.contactPhone || "")}。${stateSummary(state)}确认无误请说确认预约或按1。需要调整可说修改日期、修改场地、修改时间、修改姓名或修改电话；不确认请说不确认或按2。`;
   }
 }
-function respond(callSid: string, state: VoiceState, prefix = "") {
-  const next = { ...state, turn: randomUUID() };
-  setChannelState(`voice:${callSid}`, JSON.stringify(next));
-  const action = `${baseUrl()}/api/webhooks/voice?turn=${next.turn}`;
+function renderGather(state: VoiceState, prefix = "", promptState = state) {
+  const action = `${baseUrl()}/api/webhooks/voice?turn=${state.turn}`;
   const numbers: Partial<Record<Step, number>> = {
     menu: 1,
     date: 8,
@@ -122,10 +121,58 @@ function respond(callSid: string, state: VoiceState, prefix = "") {
     confirm: 1,
   };
   const input = `input="dtmf speech" language="zh-CN" speechTimeout="auto" timeout="7" finishOnKey="#"${numbers[state.step] ? ` numDigits="${numbers[state.step]}"` : ""}`;
-  return `${prefix ? say(prefix) : ""}<Gather ${input} action="${escapeXml(action)}" method="POST" actionOnEmptyResult="true">${say(prompt(state))}</Gather>`;
+  return `${prefix ? say(prefix) : ""}<Gather ${input} action="${escapeXml(action)}" method="POST" actionOnEmptyResult="true">${say(prompt(promptState))}</Gather>`;
+}
+function respond(callSid: string, state: VoiceState, prefix = "") {
+  const next = { ...state, turn: randomUUID(), introduced: true };
+  setChannelState(`voice:${callSid}`, JSON.stringify(next));
+  return renderGather(next, prefix, state);
 }
 function menu(callSid: string, prefix = "") {
-  return respond(callSid, { step: "menu", turn: "" }, prefix);
+  return respond(
+    callSid,
+    { step: "menu", turn: "", introduced: Boolean(prefix) },
+    prefix,
+  );
+}
+function currentVoiceState(callSid: string): VoiceState | null {
+  const saved = getChannelState(`voice:${callSid}`);
+  if (!saved) return null;
+  try {
+    const state = JSON.parse(saved) as VoiceState;
+    if (
+      !state ||
+      typeof state !== "object" ||
+      !/^[a-f0-9-]{36}$/.test(state.turn) ||
+      ![
+        "menu",
+        "date",
+        "court",
+        "hour",
+        "duration",
+        "name",
+        "contact",
+        "id",
+        "code",
+        "confirm",
+      ].includes(state.step)
+    )
+      return null;
+    return state;
+  } catch {
+    return null;
+  }
+}
+// An incomplete callback may repeat a question, but must never consume a
+// confirmation against a newer state or replay the cached initial greeting.
+export function recoverVoiceTurn(callSid: string): string {
+  const state = currentVoiceState(callSid);
+  if (!state)
+    return menu(callSid, "本次会话已中断，尚未提交新的操作，请重新选择。 ");
+  return renderGather(
+    { ...state, introduced: true },
+    "没有取得这次回答，请再次回答当前问题。尚未提交新的操作。 ",
+  );
 }
 function originalBooking(state: VoiceState): Booking {
   return getBooking(state.id!, state.code!);
@@ -195,16 +242,13 @@ export function handleVoice(
   digits: string,
   speech = "",
 ) {
-  const saved = getChannelState(`voice:${callSid}`);
-  if (!turn) return menu(callSid);
-  if (!saved) return menu(callSid, "会话已过期，请重新开始。 ");
-  let state: VoiceState;
-  try {
-    state = JSON.parse(saved);
-  } catch {
-    return menu(callSid, "会话已重置。 ");
-  }
-  if (state.turn !== turn) throw new AppError("电话会话已更新", 409);
+  if (!turn)
+    return digits.trim() || speech.trim()
+      ? recoverVoiceTurn(callSid)
+      : menu(callSid);
+  let state = currentVoiceState(callSid);
+  if (!state) return menu(callSid, "会话已过期，请重新开始。 ");
+  if (state.turn !== turn) return recoverVoiceTurn(callSid);
   const text = stripSpeech(speech);
   if (/^(不预约了|不预订了|退出|结束通话|挂断|再见|算了)$/.test(text)) {
     setChannelState(`voice:${callSid}`, null);

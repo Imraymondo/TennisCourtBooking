@@ -91,8 +91,16 @@ export function isOffTopic(input: string): boolean {
   );
 }
 
+// ASR frequently transcribes the same booking request as 预定 or 预订.
+// Normalize only intent/confirmation text, never customer names or contacts.
+function normalizeBookingTerms(input: string): string {
+  return input.replace(/预定|預定|預訂/g, "预订").replace(/預約/g, "预约");
+}
+
 export function parseIntent(input: string): VoiceIntent | null {
-  const value = stripSpeech(input).toLowerCase().replace(/\s+/g, "");
+  const value = normalizeBookingTerms(stripSpeech(input))
+    .toLowerCase()
+    .replace(/\s+/g, "");
   if (!value || isOffTopic(value)) return null;
   if (
     /不(?:想|要|需要)?(?:取消|预订|预约|修改)|别(?:取消|预订|预约|修改)/.test(
@@ -460,7 +468,7 @@ export function parseNameSpeech(input: string): string | null {
 /** Final mutations require an explicit confirmation phrase, not casual assent. */
 export function explicitConfirmation(input: string): VoiceConfirmation {
   if (/[?？]|吗|嗎|么|麼|是否/.test(input) || isOffTopic(input)) return null;
-  const value = stripSpeech(input)
+  const value = normalizeBookingTerms(stripSpeech(input))
     .toLowerCase()
     .replace(/[\s，,]/g, "");
   if (

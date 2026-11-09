@@ -101,3 +101,19 @@ npm run phone:local
 ## 验证范围
 
 自动化测试验证回调的原始请求体、查询串、Twilio签名保留，其他路径拒绝，敏感头剥离，超时和大小限制，以及语音确认到共享预约数据库的完整流程。真实隧道账号、真实号码语音服务和实际通话必须在本机填好凭据后验证，不能用模拟测试结果替代。
+
+## 语音提示重复时的排查
+
+程序支持“预定”“预订”“预约”及其繁体写法。升级代码后，先用原来的 `phone:local` 终端按 Ctrl+C 停止，再运行 `git pull` 和 `npm run phone:local`。如果使用下载的源码包，请更新程序文件并保留原来的 `.env.local` 和 `.data`。隧道地址如改变，更新Twilio号码的Voice POST回调地址。
+
+需要进一步排查时，在本机 `.env.local` 添加 `VOICE_DEBUG=1` 并重启。终端只输出以下类型的脱敏信息：
+
+```text
+Voice callback: {"turn":"present","input":"speech","handling":"routed"}
+```
+
+- `input=speech` 表示服务器收到语音识别结果；`input=empty` 表示本轮没有收到有效语音或按键。
+- `turn=present` 表示收到会话标识；`handling=recovery` 表示回调缺少或带错会话标识，程序只重问当前问题，不会提交或重置预约。
+- 正常后续请求应使用程序返回的Gather action地址，其中带 `?turn=...`，不要将后续步骤手工重定向到初始欢迎地址。
+
+可以提供这些状态、错误码和 `git rev-parse --short HEAD` 输出的版本号，不需要发送Auth Token、实际语音转写、管理码或客户联系方式。

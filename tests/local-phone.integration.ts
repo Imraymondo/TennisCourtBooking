@@ -287,7 +287,9 @@ test("signed speech crosses the real relay and production app, requires confirma
     return { ...result, turn };
   };
   assert.match((await speak()).text, /欢迎使用/);
-  assert.match((await speak("我要预约")).text, /哪一天/);
+  const requested = await speak("我要预定网球场");
+  assert.match(requested.text, /哪一天/);
+  assert.doesNotMatch(requested.text, /欢迎使用/);
   assert.match((await speak("2099年12月1日")).text, /选择一号球场或二号球场/);
   assert.match((await speak("一号球场")).text, /几点开始/);
   assert.match((await speak("下午三点")).text, /几个小时/);
@@ -302,7 +304,7 @@ test("signed speech crosses the real relay and production app, requires confirma
     "gathering details must not reserve a court before explicit confirmation",
   );
 
-  const committed = await speak("确认预约");
+  const committed = await speak("确认预定");
   assert.match(committed.text, /网站日程已更新/);
   const schedule = await publicSchedule();
   const bookings = schedule.courts.flatMap((court) => court.bookings);
