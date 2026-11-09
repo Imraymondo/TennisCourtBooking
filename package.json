@@ -12,6 +12,7 @@
     "phone:check": "node scripts/phone-local.mjs --check",
     "phone:local": "node scripts/phone-local.mjs",
     "phone:diagnose": "node scripts/phone-local.mjs --diagnose",
+    "sms:local": "node scripts/phone-local.mjs --sms",
     "build": "next build",
     "start": "node scripts/start-production.mjs",
     "lint": "eslint . --max-warnings=0",

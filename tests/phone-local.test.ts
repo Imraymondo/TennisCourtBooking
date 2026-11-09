@@ -109,6 +109,18 @@ test("check takes precedence over diagnose without opening connections or exposi
   assertPrivate(result.output);
 });
 
+test("SMS opt-in preflight remains non-networking and private with check and diagnose flags", () => {
+  for (const args of [
+    ["--sms", "--check"],
+    ["--check", "--diagnose", "--sms"],
+  ]) {
+    const result = check({}, args);
+    assert.equal(result.status, 0, result.output);
+    assert.ok(result.output.includes("does not connect"));
+    assertPrivate(result.output);
+  }
+});
+
 test("invalid phone input is rejected without echoing the supplied value", () => {
   const phone = "private-invalid-phone-do-not-display";
   const result = check({ TWILIO_PHONE_NUMBER: phone });

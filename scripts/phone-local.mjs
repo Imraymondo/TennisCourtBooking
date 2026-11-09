@@ -10,6 +10,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 process.env.NODE_ENV = "development";
 nextEnv.loadEnvConfig(root, true);
 
+const enableSms = process.argv.includes("--sms");
 const errors = [];
 const [major, minor] = process.versions.node.split(".").map(Number);
 if (major !== 24 || minor < 5)
@@ -52,9 +53,9 @@ if (
 if (
   process.argv
     .slice(2)
-    .some((argument) => !["--check", "--diagnose"].includes(argument))
+    .some((argument) => !["--check", "--diagnose", "--sms"].includes(argument))
 )
-  errors.push("Supported command arguments are --check and --diagnose.");
+  errors.push("Supported command arguments are --check, --diagnose and --sms.");
 if (errors.length) {
   for (const error of errors) console.error(error);
   console.error("See docs/local-phone.md. Never paste credentials into chat.");
@@ -67,6 +68,10 @@ if (process.argv.includes("--check")) {
   console.log(
     "This check does not connect to ngrok, verify provider accounts, or place a call.",
   );
+  if (enableSms)
+    console.log(
+      "SMS callback forwarding requested; verify SMS capability in the Twilio console before testing.",
+    );
   process.exit(0);
 }
 
@@ -110,7 +115,7 @@ try {
     probe.listen(webPort, "127.0.0.1", done);
   });
   await new Promise((done) => probe.close(done));
-  relay = createVoiceRelay({ upstreamPort: webPort });
+  relay = createVoiceRelay({ upstreamPort: webPort, allowSms: enableSms });
   await new Promise((done, reject) => {
     relay.once("error", reject);
     relay.listen(0, "127.0.0.1", done);
@@ -118,7 +123,9 @@ try {
   const relayPort = relay.address().port;
   const ngrok = (await import("@ngrok/ngrok")).default;
   console.log(
-    "Opening a temporary HTTPS endpoint for the voice webhook only...",
+    enableSms
+      ? "Opening a temporary HTTPS endpoint for voice and SMS webhooks only..."
+      : "Opening a temporary HTTPS endpoint for the voice webhook only...",
   );
   let openingTimer;
   try {
@@ -213,20 +220,22 @@ try {
     }
     if (!ready && !stopping) throw new Error("Local app not ready");
     if (!stopping) {
-      // Compile the voice route before the first real call. An unsigned probe
-      // must be denied and never creates a booking or contacts a provider.
-      const warm = await fetch(
-        `http://127.0.0.1:${webPort}/api/webhooks/voice`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/x-www-form-urlencoded" },
-          body: "",
-          signal: AbortSignal.timeout(15_000),
-        },
-      );
-      await warm.arrayBuffer();
-      if (warm.status !== 403)
-        throw new Error("Voice signature validation is not ready");
+      // Compile each enabled route before the first real callback. Unsigned
+      // probes must be denied without creating bookings or contacting providers.
+      for (const channel of enableSms ? ["voice", "sms"] : ["voice"]) {
+        const warm = await fetch(
+          `http://127.0.0.1:${webPort}/api/webhooks/${channel}`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/x-www-form-urlencoded" },
+            body: "",
+            signal: AbortSignal.timeout(15_000),
+          },
+        );
+        await warm.arrayBuffer();
+        if (warm.status !== 403)
+          throw new Error("Webhook signature validation is not ready");
+      }
       console.log(`Local website: http://127.0.0.1:${webPort}`);
       if (childEnvironment.VOICE_DEBUG === "1")
         console.log(
@@ -235,12 +244,22 @@ try {
       console.log(
         `Twilio Voice webhook (POST): ${external.origin}/api/webhooks/voice`,
       );
+      if (enableSms)
+        console.log(
+          `Twilio Messaging webhook (POST): ${external.origin}/api/webhooks/sms`,
+        );
       console.log(
-        "Only signed voice webhook requests are forwarded. The public endpoint does not expose the website or staff pages.",
+        enableSms
+          ? "Only signed voice and SMS webhook requests are forwarded. The public endpoint does not expose the website, staff pages or email webhook."
+          : "Only signed voice webhook requests are forwarded. The public endpoint does not expose the website or staff pages.",
       );
       console.log(
-        "Set this URL under the Twilio number's Voice > A CALL COMES IN > Webhook > HTTP POST, then call your Twilio number.",
+        "Set the Voice URL under the Twilio number's Voice > A CALL COMES IN > Webhook > HTTP POST, then call your Twilio number.",
       );
+      if (enableSms)
+        console.log(
+          "Set the Messaging URL under Messaging > A MESSAGE COMES IN > Webhook > HTTP POST. Send HELP from your phone first. See docs/local-sms.md.",
+        );
       console.log(
         "Keep this terminal and computer running. Ctrl+C closes the temporary endpoint; bookings stay on your computer.",
       );

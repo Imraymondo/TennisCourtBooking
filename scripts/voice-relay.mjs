@@ -1,10 +1,12 @@
 import { createServer, request as httpRequest } from "node:http";
 
-// Only this one endpoint can cross the tunnel. The website remains local.
+// Voice and explicitly enabled SMS callbacks can cross the tunnel. The website
+// and staff endpoints remain local; email is not enabled by this relay.
 export function createVoiceRelay({
   upstreamPort,
   deadlineMs = 10_000,
   maxBodyBytes = 32_768,
+  allowSms = false,
 }) {
   if (
     !Number.isInteger(upstreamPort) ||
@@ -38,7 +40,11 @@ export function createVoiceRelay({
         });
         outgoing.end(text);
       };
-      if (incoming.url?.split("?")[0] !== "/api/webhooks/voice") {
+      const path = incoming.url?.split("?")[0];
+      if (
+        path !== "/api/webhooks/voice" &&
+        !(allowSms === true && path === "/api/webhooks/sms")
+      ) {
         incoming.resume();
         send(404, "Not found");
         return;

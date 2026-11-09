@@ -37,6 +37,21 @@ npm run phone:local
 
 将命令实际输出的VoiceWebhook地址填入Twilio号码的来电配置，选择POST，再拨打该号码。无需Render账号或购买域名；保持电脑和终端运行。详见[本机真实电话接入步骤](docs/local-phone.md)。
 
+### 本机同时接收电话和短信
+
+需要短信时，在原服务的终端按 **Ctrl+C** 停止，再更新代码并启动：
+
+```bash
+git pull
+npm run sms:local
+```
+
+`sms:local` 使用同一个本机网站和SQLite数据库，同时转发经过认证的Voice与Messaging回调；`phone:local` 默认仍只转发Voice。首页、`/admin` 和邮件接口均不通过隧道公开，不需要删除或重新填写已有 `.env.local`，也不要删除 `.data`。
+
+启动后，将实际输出的 **Twilio Messaging webhook (POST)** 地址填入号码的 **Messaging → A message comes in → Webhook → HTTP POST**。已设置过短信回调，也要与本次启动输出的最新地址核对；隧道域名变化时，Voice回调也需同步更新。号码必须支持SMS，试用账号按Twilio控制台要求验证测试号码。
+
+手机先发送“帮助”，再查询未来日期、预订、修改和取消；本机网页会显示同一份日程。短信使用固定指令，不是AI闲聊。完整步骤、指令示例及无回复排查见[本机真实短信接入与测试](docs/local-sms.md)。自动化测试只模拟短信回调，尚不能证明真实手机短信已接通。
+
 ### 工作人员密码
 
 开发模式首次访问后台时，在 `.data/admin-password` 自动生成随机密码。请在自己的终端查看该本地文件登录，不要提交或分享。也可在未跟踪的 `.env.local` 中设置至少12位的 `ADMIN_PASSWORD`。
@@ -57,6 +72,7 @@ npm run phone:local
 | `npm run dev`              | 开发服务                                 |
 | `npm run phone:check`      | 检查本机电话配置，不联网、不显示凭据值   |
 | `npm run phone:local`      | 启动本机网站和仅转发电话回调的临时隧道   |
+| `npm run sms:local`        | 启动同一本机网站，转发电话和短信回调     |
 | `npm run phone:diagnose`   | 启动电话服务并输出不含语音原文的诊断状态 |
 | `npm run check`            | ESLint与TypeScript                       |
 | `npm test`                 | 业务、时区、并发、持久化和渠道测试       |
@@ -87,6 +103,8 @@ npm start
 3. 在号码Messaging配置中，将收到短信的 **POST webhook** 设置为站点的 `/api/webhooks/sms`。
 4. 在Voice配置中，将来电的 **POST webhook** 设置为站点的 `/api/webhooks/voice`。
 5. 使用真实号码分别验证查询、创建、修改和取消后，再对外使用。
+
+如果网站只在自己的电脑运行，请使用[本机短信接入步骤](docs/local-sms.md)中的 `npm run sms:local`；仅运行 `phone:local` 时，短信回调不会通过临时隧道。
 
 系统校验Twilio签名及接收号码，重试相同事件时复用结果。`TWILIO_AUTH_TOKEN` 用于本地签名校验，必须直接提供给应用，不能使用仅在出站代理替换的占位符。
 

@@ -127,7 +127,7 @@ before(
       await delay(100);
     }
     assert.ok(ready, "production application must become ready");
-    relay = createVoiceRelay({ upstreamPort: port });
+    relay = createVoiceRelay({ upstreamPort: port, allowSms: true });
     await new Promise<void>((resolve, reject) => {
       relay!.once("error", reject);
       relay!.listen(0, "127.0.0.1", resolve);
@@ -207,15 +207,15 @@ async function signedTurn(turn: Turn, validSignature = true) {
   return { response, text: await response.text() };
 }
 
-async function publicSchedule(): Promise<Availability> {
-  const response = await fetch(`${appUrl}/api/availability?date=${date}`, {
+async function publicSchedule(dateValue = date): Promise<Availability> {
+  const response = await fetch(`${appUrl}/api/availability?date=${dateValue}`, {
     signal: AbortSignal.timeout(5_000),
   });
   assert.equal(response.status, 200);
   return response.json() as Promise<Availability>;
 }
 
-test("the local-only phone relay hides website and staff routes and the real handler rejects forged signatures", async () => {
+test("the opt-in SMS relay hides website, staff and email routes and both real handlers reject forged signatures", async () => {
   for (const path of ["/", "/admin", "/api/bookings", "/api/admin/session"]) {
     const response = await fetch(relayUrl + path, {
       signal: AbortSignal.timeout(5_000),
@@ -239,6 +239,34 @@ test("the local-only phone relay hides website and staff routes and the real han
   );
   assert.equal(forged.response.status, 403);
   assert.equal(forged.response.headers.get("set-cookie"), null);
+  const forgedSms = await signedTurn(
+    {
+      path: "/api/webhooks/sms",
+      fields: {
+        MessageSid: "SM" + randomUUID().replaceAll("-", ""),
+        From: callingNumber,
+        To: receivingNumber,
+        Body: "预订 2 2099-12-01 23:00 李四",
+      },
+    },
+    false,
+  );
+  assert.equal(forgedSms.response.status, 403);
+  assert.equal(forgedSms.response.headers.get("set-cookie"), null);
+  const email = await fetch(`${relayUrl}/api/webhooks/email`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: "Basic dGVzdDp0ZXN0",
+    },
+    body: JSON.stringify({ MessageID: randomUUID() }),
+    signal: AbortSignal.timeout(5_000),
+  });
+  assert.equal(
+    email.status,
+    404,
+    "enabling SMS must not expose email callbacks",
+  );
   const schedule = await publicSchedule();
   assert.equal(schedule.courts.flatMap((court) => court.bookings).length, 0);
 });
@@ -364,4 +392,164 @@ test("signed speech crosses the real relay and production app, requires confirma
   assert.equal(privateBooking.phone, callingNumber);
   assert.equal(privateBooking.durationHours, 2);
   assert.equal(privateBooking.customerName, "张三");
+});
+
+test("signed SMS crosses the opt-in relay and shared production database for query, booking, modification and cancellation", async () => {
+  const sms = async (
+    body: string,
+    messageSid = "SM" + randomUUID().replaceAll("-", ""),
+  ) => {
+    const turn: Turn = {
+      path: "/api/webhooks/sms",
+      fields: {
+        MessageSid: messageSid,
+        From: callingNumber,
+        To: receivingNumber,
+        Body: body,
+      },
+    };
+    const result = await signedTurn(turn);
+    assert.equal(result.response.status, 200);
+    assert.match(
+      result.response.headers.get("content-type") || "",
+      /text\/xml/,
+    );
+    assert.equal(result.response.headers.get("cache-control"), "no-store");
+    assert.equal(result.response.headers.get("set-cookie"), null);
+    assert.match(result.text, /<Message>[\s\S]+<\/Message>/);
+    return { ...result, turn };
+  };
+  const query = await sms("查询 2099-12-01 2 2");
+  assert.match(query.text, /可开始时间/);
+  assert.match(query.text, /2号场/);
+  assert.doesNotMatch(query.text, /1号场/);
+  const initialCount = (await publicSchedule()).courts.flatMap(
+    (court) => court.bookings,
+  ).length;
+  const created = await sms("预订 2 2099-12-01 23:00 李四");
+  const id = created.text.match(/预约(\d{8})/)?.[1];
+  const accessCode = created.text.match(/管理码：(\d{10})/)?.[1];
+  assert.ok(
+    id && accessCode,
+    "the SMS sender receives a reference and private management code",
+  );
+  const schedule = await publicSchedule();
+  const bookings = schedule.courts.flatMap((court) => court.bookings);
+  assert.equal(bookings.length, initialCount + 1);
+  const booking = bookings.find((entry) => entry.id === id);
+  assert.ok(
+    booking,
+    "an SMS booking appears in the same schedule used by the website",
+  );
+  assert.equal(booking.customerName, "李四");
+  assert.equal(booking.courtId, 2);
+  assert.equal(
+    Date.parse(booking.endsAt) - Date.parse(booking.startsAt),
+    7_200_000,
+  );
+  const tomorrow = await publicSchedule("2099-12-02");
+  assert.ok(
+    tomorrow.courts[1].bookings.some((entry) => entry.id === id),
+    "a two-hour 23:00 booking remains occupied across midnight",
+  );
+  for (const publicData of [schedule, tomorrow]) {
+    const serialized = JSON.stringify(publicData);
+    assert.ok(!serialized.includes(callingNumber));
+    assert.ok(!serialized.includes(accessCode));
+    assert.ok(
+      !serialized.includes('"phone"') &&
+        !serialized.includes('"email"') &&
+        !serialized.includes('"accessCode"'),
+    );
+  }
+  const replay = await signedTurn(created.turn);
+  assert.equal(replay.response.status, 200);
+  assert.equal(
+    replay.text,
+    created.text,
+    "duplicate MessageSid replays the same private reply",
+  );
+  assert.equal(
+    (await publicSchedule()).courts.flatMap((court) => court.bookings).length,
+    initialCount + 1,
+  );
+
+  const lookup = async () => {
+    const response = await fetch(`${appUrl}/api/bookings/lookup`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: appUrl },
+      body: JSON.stringify({ id, accessCode }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    assert.equal(response.status, 200);
+    return ((await response.json()) as { booking: Booking }).booking;
+  };
+  const privateBooking = await lookup();
+  assert.equal(privateBooking.source, "sms");
+  assert.equal(privateBooking.phone, callingNumber);
+  assert.equal(privateBooking.customerName, "李四");
+  assert.equal(privateBooking.durationHours, 2);
+  assert.equal(privateBooking.version, 1);
+
+  const conflict = await sms("预订 2 2099-12-02 00:00 王五");
+  assert.match(conflict.text, /已被预约/);
+  assert.equal(
+    (await publicSchedule("2099-12-02")).courts[1].bookings.filter(
+      (entry) => entry.id === id,
+    ).length,
+    1,
+  );
+  assert.equal((await lookup()).version, 1);
+  const viewed = await sms(`查看 ${id} ${accessCode}`);
+  assert.match(viewed.text, new RegExp(`预约${id}`));
+  assert.match(viewed.text, /已确认/);
+  const edited = await sms(`修改 ${id} ${accessCode} 1 2099-12-02 12:00 3`);
+  assert.match(edited.text, /1号场/);
+  assert.match(edited.text, /3小时/);
+  const editReplay = await signedTurn(edited.turn);
+  assert.equal(editReplay.response.status, 200);
+  assert.equal(editReplay.text, edited.text);
+  const updated = await lookup();
+  assert.equal(
+    updated.version,
+    2,
+    "a duplicate modification must not increment the version again",
+  );
+  assert.equal(updated.courtId, 1);
+  assert.equal(updated.durationHours, 3);
+  assert.equal(updated.customerName, "李四");
+  assert.equal(updated.phone, callingNumber);
+  assert.equal(
+    (await publicSchedule()).courts
+      .flatMap((court) => court.bookings)
+      .some((entry) => entry.id === id),
+    false,
+  );
+  const editedPublic = await publicSchedule("2099-12-02");
+  assert.ok(editedPublic.courts[0].bookings.some((entry) => entry.id === id));
+  assert.equal(
+    editedPublic.courts[1].bookings.some((entry) => entry.id === id),
+    false,
+  );
+
+  const cancelled = await sms(`取消 ${id} ${accessCode}`);
+  assert.match(cancelled.text, /已取消/);
+  const cancelReplay = await signedTurn(cancelled.turn);
+  assert.equal(cancelReplay.response.status, 200);
+  assert.equal(cancelReplay.text, cancelled.text);
+  assert.equal((await lookup()).status, "cancelled");
+  assert.equal((await lookup()).version, 3);
+  const afterCancellation = await publicSchedule("2099-12-02");
+  assert.equal(
+    afterCancellation.courts
+      .flatMap((court) => court.bookings)
+      .some((entry) => entry.id === id),
+    false,
+  );
+  assert.equal(
+    afterCancellation.slots.find(
+      (slot) => slot.courtId === 1 && slot.startLocal.endsWith("T12:00"),
+    )?.available,
+    true,
+  );
 });

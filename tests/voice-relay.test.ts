@@ -10,6 +10,7 @@ import { test, type TestContext } from "node:test";
 import { createVoiceRelay } from "../scripts/voice-relay.mjs";
 
 const voicePath = "/api/webhooks/voice";
+const smsPath = "/api/webhooks/sms";
 const signature = "local-relay-test-signature-not-a-real-credential";
 const formHeaders = {
   "content-type": "application/x-www-form-urlencoded; charset=utf-8",
@@ -36,7 +37,11 @@ async function close(server: Server) {
 async function setup(
   t: TestContext,
   handler: (req: IncomingMessage, res: ServerResponse) => void,
-  options: { deadlineMs?: number; maxBodyBytes?: number } = {},
+  options: {
+    deadlineMs?: number;
+    maxBodyBytes?: number;
+    allowSms?: boolean;
+  } = {},
 ) {
   const upstream = createServer(handler);
   const upstreamPort = await listen(upstream);
@@ -102,74 +107,92 @@ function send(
   });
 }
 
-test("voice relay preserves signed form bytes and encoded query while stripping browser credentials and forwarding headers", async (t) => {
-  const body = Buffer.from(
-    "Digits=01&SpeechResult=%E5%BC%A0%E4%B8%89+%2B&From=%2B61400123456&To=%2B61255550100",
-  );
-  const target = `${voicePath}?turn=5dff64a5-b5cf-4b2a-8dfb-4d97ee349bc0&encoded=%2B+%20&encoded=second`;
-  let seen:
-    | { path: string; headers: IncomingMessage["headers"]; body: Buffer }
-    | undefined;
-  const xml = '<?xml version="1.0"?><Response><Say>本地测试</Say></Response>';
-  const { port, upstreamPort } = await setup(t, (req, res) => {
-    const received: Buffer[] = [];
-    req.on("data", (chunk) => received.push(chunk));
-    req.once("end", () => {
-      seen = {
-        path: req.url!,
-        headers: req.headers,
-        body: Buffer.concat(received),
-      };
-      res.writeHead(200, {
-        "content-type": "text/xml; charset=utf-8",
-        "set-cookie": "local-test-cookie=unused",
-        location: "https://example.invalid/",
-        "x-upstream-only": "private",
-      });
-      res.end(xml);
+for (const channel of ["voice", "sms"]) {
+  test(`${channel} relay preserves signed form bytes and encoded query while stripping browser credentials and forwarding headers`, async (t) => {
+    const body = Buffer.from(
+      channel === "sms"
+        ? "Body=%E6%9F%A5%E8%AF%A2+2031-02-01+%2B&MessageSid=SMlocaltest&From=%2B61400123456&To=%2B61255550100"
+        : "Digits=01&SpeechResult=%E5%BC%A0%E4%B8%89+%2B&From=%2B61400123456&To=%2B61255550100",
+    );
+    const target = `${channel === "sms" ? smsPath : voicePath}?turn=5dff64a5-b5cf-4b2a-8dfb-4d97ee349bc0&encoded=%2B+%20&encoded=second`;
+    let seen:
+      | { path: string; headers: IncomingMessage["headers"]; body: Buffer }
+      | undefined;
+    const xml = '<?xml version="1.0"?><Response><Say>本地测试</Say></Response>';
+    const { port, upstreamPort } = await setup(
+      t,
+      (req, res) => {
+        const received: Buffer[] = [];
+        req.on("data", (chunk) => received.push(chunk));
+        req.once("end", () => {
+          seen = {
+            path: req.url!,
+            headers: req.headers,
+            body: Buffer.concat(received),
+          };
+          res.writeHead(200, {
+            "content-type": "text/xml; charset=utf-8",
+            "set-cookie": "local-test-cookie=unused",
+            location: "https://example.invalid/",
+            "x-upstream-only": "private",
+          });
+          res.end(xml);
+        });
+      },
+      { allowSms: channel === "sms" },
+    );
+    const reply = await send(port, {
+      path: target,
+      headers: {
+        host: "untrusted.example",
+        cookie: "local-test-cookie=unused",
+        authorization: "Bearer local-test-placeholder",
+        origin: "https://untrusted.example",
+        "x-forwarded-host": "untrusted.example",
+        "x-forwarded-proto": "https",
+        "x-forwarded-for": "192.0.2.1",
+        "x-real-ip": "192.0.2.2",
+        forwarded: "for=192.0.2.3;host=untrusted.example;proto=https",
+        "x-api-key": "local-test-placeholder",
+        "x-postmark-inbound-secret": "local-test-placeholder",
+        "content-length": body.length,
+      },
+      chunks: [body],
     });
+    assert.equal(reply.status, 200);
+    assert.equal(reply.body.toString(), xml);
+    assert.equal(reply.headers["content-type"], "text/xml; charset=utf-8");
+    assert.equal(reply.headers["cache-control"], "no-store");
+    assert.equal(reply.headers["set-cookie"], undefined);
+    assert.equal(reply.headers.location, undefined);
+    assert.equal(reply.headers["x-upstream-only"], undefined);
+    assert.ok(seen);
+    assert.equal(seen.path, target);
+    assert.deepEqual(seen.body, body);
+    assert.equal(seen.headers["x-twilio-signature"], signature);
+    assert.equal(seen.headers["content-type"], formHeaders["content-type"]);
+    assert.equal(seen.headers["content-length"], String(body.length));
+    assert.equal(seen.headers.host, `127.0.0.1:${upstreamPort}`);
+    for (const header of [
+      "cookie",
+      "authorization",
+      "origin",
+      "x-forwarded-host",
+      "x-forwarded-proto",
+      "x-forwarded-for",
+      "x-real-ip",
+      "forwarded",
+      "x-api-key",
+      "x-postmark-inbound-secret",
+    ]) {
+      assert.equal(
+        seen.headers[header],
+        undefined,
+        `relay must strip ${header}`,
+      );
+    }
   });
-  const reply = await send(port, {
-    path: target,
-    headers: {
-      host: "untrusted.example",
-      cookie: "local-test-cookie=unused",
-      authorization: "Bearer local-test-placeholder",
-      origin: "https://untrusted.example",
-      "x-forwarded-host": "untrusted.example",
-      "x-forwarded-proto": "https",
-      "x-forwarded-for": "192.0.2.1",
-      "x-real-ip": "192.0.2.2",
-      "content-length": body.length,
-    },
-    chunks: [body],
-  });
-  assert.equal(reply.status, 200);
-  assert.equal(reply.body.toString(), xml);
-  assert.equal(reply.headers["content-type"], "text/xml; charset=utf-8");
-  assert.equal(reply.headers["cache-control"], "no-store");
-  assert.equal(reply.headers["set-cookie"], undefined);
-  assert.equal(reply.headers.location, undefined);
-  assert.equal(reply.headers["x-upstream-only"], undefined);
-  assert.ok(seen);
-  assert.equal(seen.path, target);
-  assert.deepEqual(seen.body, body);
-  assert.equal(seen.headers["x-twilio-signature"], signature);
-  assert.equal(seen.headers["content-type"], formHeaders["content-type"]);
-  assert.equal(seen.headers["content-length"], String(body.length));
-  assert.equal(seen.headers.host, `127.0.0.1:${upstreamPort}`);
-  for (const header of [
-    "cookie",
-    "authorization",
-    "origin",
-    "x-forwarded-host",
-    "x-forwarded-proto",
-    "x-forwarded-for",
-    "x-real-ip",
-  ]) {
-    assert.equal(seen.headers[header], undefined, `relay must strip ${header}`);
-  }
-});
+}
 
 test("only POST on the literal voice webhook target is forwarded", async (t) => {
   let upstreamRequests = 0;
@@ -211,6 +234,63 @@ test("only POST on the literal voice webhook target is forwarded", async (t) => 
     415,
   );
   assert.equal(upstreamRequests, 0);
+});
+
+test("SMS opt-in keeps method, signature, content type and literal-path restrictions without exposing other routes", async (t) => {
+  const upstreamPaths: string[] = [];
+  const { port } = await setup(
+    t,
+    (req, res) => {
+      upstreamPaths.push(req.url!);
+      req.resume();
+      res.end("allowed webhook");
+    },
+    { allowSms: true },
+  );
+
+  for (const path of [
+    "/",
+    "/admin",
+    "/api/admin/login",
+    "/api/bookings",
+    "/api/webhooks/email",
+    `${smsPath}/`,
+    "/api/%77ebhooks/sms",
+    "/api/webhooks/%73ms",
+    "/api/../api/webhooks/sms",
+    "http://example.invalid/api/webhooks/sms",
+  ]) {
+    assert.equal((await send(port, { path })).status, 404, path);
+  }
+  for (const method of ["GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+    const reply = await send(port, { path: smsPath, method });
+    assert.equal(reply.status, 405, method);
+    assert.equal(reply.headers.allow, "POST");
+  }
+  for (const value of [undefined, "", "x".repeat(257)]) {
+    const reply = await send(port, {
+      path: smsPath,
+      headers: { "x-twilio-signature": value },
+    });
+    assert.equal(reply.status, 403);
+  }
+  for (const value of [undefined, "application/json", "text/plain"]) {
+    const reply = await send(port, {
+      path: smsPath,
+      headers: { "content-type": value },
+    });
+    assert.equal(reply.status, 415);
+  }
+  assert.deepEqual(
+    upstreamPaths,
+    [],
+    "rejected requests must never reach the app",
+  );
+
+  for (const path of [voicePath, smsPath]) {
+    assert.equal((await send(port, { path })).status, 200);
+  }
+  assert.deepEqual(upstreamPaths, [voicePath, smsPath]);
 });
 
 test("declared and chunked oversized request bodies are rejected before contacting the application", async (t) => {
