@@ -65,6 +65,8 @@ before(
         environment[name] = "";
     }
     Object.assign(environment, {
+      BOOKING_AI_ENABLED: "0",
+      OPENAI_API_KEY: "",
       NODE_ENV: "production",
       NEXT_TELEMETRY_DISABLED: "1",
       BOOKING_DB_PATH: join(directory, "bookings.sqlite"),

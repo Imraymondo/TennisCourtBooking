@@ -8,6 +8,7 @@ import { authenticateEmail, prepareEmail } from "../lib/channels/email";
 import { COMMAND_HELP } from "../lib/channels/commands";
 
 beforeEach(() => {
+  process.env.BOOKING_AI_ENABLED = "0";
   closeDatabase();
   process.env.BOOKING_DB_PATH = ":memory:";
   process.env.APP_BASE_URL = "https://courts.example";

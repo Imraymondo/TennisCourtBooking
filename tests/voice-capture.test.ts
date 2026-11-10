@@ -9,6 +9,7 @@ import { closeDatabase, getChannelState, listBookings } from "../lib/store";
 const WEBHOOK = "https://courts.example/api/webhooks/voice";
 
 beforeEach(() => {
+  process.env.BOOKING_AI_ENABLED = "0";
   closeDatabase();
   process.env.BOOKING_DB_PATH = ":memory:";
   process.env.APP_BASE_URL = "https://courts.example";

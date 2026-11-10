@@ -11,6 +11,9 @@ process.env.NODE_ENV = "development";
 nextEnv.loadEnvConfig(root, true);
 
 const enableSms = process.argv.includes("--sms");
+const aiSetting = process.env.BOOKING_AI_ENABLED || "0";
+const bookingAiEnabled = aiSetting === "1";
+const bookingAiModel = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const errors = [];
 const [major, minor] = process.versions.node.split(".").map(Number);
 if (major !== 24 || minor < 5)
@@ -36,6 +39,16 @@ if (
 const webPort = Number(process.env.PHONE_WEB_PORT || 3000);
 if (!Number.isInteger(webPort) || webPort < 1 || webPort > 65535)
   errors.push("PHONE_WEB_PORT must be an integer from 1 to 65535.");
+if (!["0", "1"].includes(aiSetting))
+  errors.push("BOOKING_AI_ENABLED must be 0 or 1.");
+if (bookingAiEnabled && !process.env.OPENAI_API_KEY?.trim())
+  errors.push(
+    "Missing OPENAI_API_KEY: add it to your computer's .env.local when BOOKING_AI_ENABLED is 1.",
+  );
+if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(bookingAiModel))
+  errors.push(
+    "OPENAI_MODEL must be a valid model identifier using safe characters only.",
+  );
 if (
   process.env.NGROK_DOMAIN &&
   !(
@@ -61,6 +74,9 @@ if (errors.length) {
   console.error("See docs/local-phone.md. Never paste credentials into chat.");
   process.exit(1);
 }
+const bookingLanguageStatus = bookingAiEnabled
+  ? `Booking language: GPT (model ${bookingAiModel})`
+  : "Booking language: rule-based";
 if (process.argv.includes("--check")) {
   console.log(
     "Required local settings are present; no credential values were displayed.",
@@ -68,6 +84,7 @@ if (process.argv.includes("--check")) {
   console.log(
     "This check does not connect to ngrok, verify provider accounts, or place a call.",
   );
+  console.log(bookingLanguageStatus);
   if (enableSms)
     console.log(
       "SMS callback forwarding requested; verify SMS capability in the Twilio console before testing.",
@@ -237,6 +254,7 @@ try {
           throw new Error("Webhook signature validation is not ready");
       }
       console.log(`Local website: http://127.0.0.1:${webPort}`);
+      console.log(bookingLanguageStatus);
       if (childEnvironment.VOICE_DEBUG === "1")
         console.log(
           "Voice diagnostics enabled: callback metadata only; speech text and contact details are never printed.",

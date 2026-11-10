@@ -6,6 +6,7 @@ import { GET as publicAvailability } from "../app/api/availability/route";
 import { closeDatabase, listBookings } from "../lib/store";
 
 beforeEach(() => {
+  process.env.BOOKING_AI_ENABLED = "0";
   closeDatabase();
   process.env.BOOKING_DB_PATH = ":memory:";
   process.env.APP_BASE_URL = "https://courts.example";

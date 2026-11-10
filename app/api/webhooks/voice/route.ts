@@ -1,8 +1,13 @@
 import {
   handleVoice,
   recoverVoiceTurn,
+  voiceAIContext,
   voiceProgress,
 } from "@/lib/channels/voice";
+import {
+  bookingAIEnabled,
+  interpretBookingText,
+} from "@/lib/channels/booking-ai";
 import { logVoiceCallback } from "@/lib/channels/voice-diagnostics";
 import {
   verifiedTwilioForm,
@@ -18,6 +23,10 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// Twilio can retry while understanding is still in flight. Share the whole
+// result for that turn, then retain its exact XML in channel_events.
+const pendingTurns = new Map<string, Promise<string>>();
 
 export async function POST(request: Request) {
   try {
@@ -48,11 +57,43 @@ export async function POST(request: Request) {
       return xmlResponse(xml);
     }
     const key = `voice:${callSid}:${turn ?? "initial"}`;
-    const cached = diagnostic && getChannelEvent(key) !== null;
-    const xml = runChannelEvent(key, () => {
-      rateLimit(`voice:${form.get("From")}`, 200, 3_600_000);
-      return handleVoice(callSid, form.get("From")!, turn, digits, speech);
-    });
+    const saved = getChannelEvent(key);
+    const cached = saved !== null || pendingTurns.has(key);
+    let xml: string;
+    if (saved !== null) xml = JSON.parse(saved) as string;
+    else {
+      let pending = pendingTurns.get(key);
+      if (!pending) {
+        pending = (async () => {
+          rateLimit(`voice:${form.get("From")}`, 200, 3_600_000);
+          const context = bookingAIEnabled()
+            ? voiceAIContext(callSid, turn, digits, speech)
+            : null;
+          // Never hold SQLite's synchronous transaction across an API request.
+          const interpretation = context
+            ? await interpretBookingText(speech, context)
+            : null;
+          return runChannelEvent(key, () =>
+            // handleVoice checks the current turn again after the await. A late
+            // answer can only repeat the current question, never replace it.
+            handleVoice(
+              callSid,
+              form.get("From")!,
+              turn,
+              digits,
+              speech,
+              interpretation,
+            ),
+          );
+        })();
+        pendingTurns.set(key, pending);
+      }
+      try {
+        xml = await pending;
+      } finally {
+        if (pendingTurns.get(key) === pending) pendingTurns.delete(key);
+      }
+    }
     if (diagnostic)
       logVoiceCallback(form, {
         turn,

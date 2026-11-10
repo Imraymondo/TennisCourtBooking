@@ -13,6 +13,7 @@
     "phone:local": "node scripts/phone-local.mjs",
     "phone:diagnose": "node scripts/phone-local.mjs --diagnose",
     "sms:local": "node scripts/phone-local.mjs --sms",
+    "ai:check": "node --import tsx scripts/check-openai.ts",
     "build": "next build",
     "start": "node scripts/start-production.mjs",
     "lint": "eslint . --max-warnings=0",

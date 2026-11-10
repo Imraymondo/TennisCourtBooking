@@ -10,6 +10,10 @@ const fakeSettings = {
   NGROK_AUTHTOKEN: "test-only-ngrok-secret-do-not-display",
   PHONE_WEB_PORT: "3000",
   NGROK_DOMAIN: "",
+  // Explicit empty/off settings override inherited values and local env files.
+  BOOKING_AI_ENABLED: "0",
+  OPENAI_API_KEY: "",
+  OPENAI_MODEL: "",
 };
 
 // The check is deliberately run with fake credentials. Block side effects in the
@@ -62,7 +66,12 @@ function check(
   return { status: result.status, output };
 }
 
-function assertPrivate(output: string, values = Object.values(fakeSettings)) {
+function assertPrivate(
+  output: string,
+  values = Object.entries(fakeSettings)
+    .filter(([name]) => name !== "BOOKING_AI_ENABLED")
+    .map(([, value]) => value),
+) {
   for (const value of values.filter(Boolean)) {
     assert.ok(
       !output.includes(value),
@@ -99,7 +108,92 @@ test("valid fake settings pass a non-network check without revealing any values"
   const result = check();
   assert.equal(result.status, 0, result.output);
   assert.ok(result.output.includes("does not connect"));
+  assert.ok(result.output.includes("Booking language: rule-based"));
   assertPrivate(result.output);
+});
+
+test("empty/off AI test settings override inherited environment values without exposing them", () => {
+  const names = [
+    "BOOKING_AI_ENABLED",
+    "OPENAI_API_KEY",
+    "OPENAI_MODEL",
+  ] as const;
+  const saved = Object.fromEntries(
+    names.map((name) => [name, process.env[name]]),
+  );
+  const inheritedKey = "test-only-inherited-openai-secret-do-not-display";
+  try {
+    process.env.BOOKING_AI_ENABLED = "1";
+    process.env.OPENAI_API_KEY = inheritedKey;
+    process.env.OPENAI_MODEL = "inherited-private-model-do-not-display";
+    const result = check();
+    assert.equal(result.status, 0, result.output);
+    assert.ok(result.output.includes("Booking language: rule-based"));
+    assertPrivate(result.output, [inheritedKey, process.env.OPENAI_MODEL]);
+  } finally {
+    for (const name of names) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  }
+});
+
+test("GPT enabled without a nonblank API key fails by variable name without network effects", () => {
+  for (const key of ["", "   "]) {
+    const result = check({ BOOKING_AI_ENABLED: "1", OPENAI_API_KEY: key });
+    assert.equal(result.status, 1);
+    assert.ok(result.output.includes("Missing OPENAI_API_KEY"));
+    assertPrivate(result.output);
+  }
+});
+
+test("GPT preflight reports its safe default or selected model but never the API key", () => {
+  const key = "test-only-openai-secret-do-not-display";
+  for (const model of ["", "gpt-4.1", "ft:gpt-4.1-mini:example:booking:1"]) {
+    const result = check({
+      BOOKING_AI_ENABLED: "1",
+      OPENAI_API_KEY: key,
+      OPENAI_MODEL: model,
+    });
+    assert.equal(result.status, 0, result.output);
+    assert.ok(
+      result.output.includes(
+        `Booking language: GPT (model ${model || "gpt-4.1-mini"})`,
+      ),
+    );
+    assertPrivate(result.output, [
+      fakeSettings.TWILIO_AUTH_TOKEN,
+      fakeSettings.TWILIO_PHONE_NUMBER,
+      fakeSettings.NGROK_AUTHTOKEN,
+      key,
+    ]);
+  }
+});
+
+test("invalid AI flags and model strings fail with fixed messages and no supplied values", () => {
+  for (const flag of ["true", "yes", "2", "private-invalid-ai-flag\nsecret"]) {
+    const result = check({ BOOKING_AI_ENABLED: flag });
+    assert.equal(result.status, 1);
+    assert.ok(result.output.includes("BOOKING_AI_ENABLED must be 0 or 1"));
+    assertPrivate(result.output);
+    assert.ok(!result.output.includes(flag));
+  }
+  for (const model of [
+    "model with spaces",
+    "https://private.example/model",
+    "model\nprivate-secret",
+    "model\u001b[31mprivate-secret",
+    "../private",
+    "x".repeat(121),
+  ]) {
+    const result = check({ OPENAI_MODEL: model });
+    assert.equal(result.status, 1);
+    assert.ok(
+      result.output.includes("OPENAI_MODEL must be a valid model identifier"),
+    );
+    assertPrivate(result.output);
+    assert.ok(!result.output.includes(model));
+  }
 });
 
 test("check takes precedence over diagnose without opening connections or exposing settings", () => {

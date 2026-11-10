@@ -8,10 +8,18 @@ import {
   getAvailability,
   getBooking,
   getChannelState,
+  listBookings,
   setChannelState,
   updateBooking,
 } from "@/lib/store";
-import { bookingTimes, todayLocal } from "@/lib/time";
+import {
+  bookingTimes,
+  instantToLocal,
+  todayLocal,
+  validateDate,
+  validateDuration,
+} from "@/lib/time";
+import type { BookingAIContext, BookingInterpretation } from "./booking-ai";
 import { availabilityReply, bookingSummary } from "./commands";
 import { baseUrl, channelError, escapeXml } from "./security";
 import { VOICE_CAPTURE } from "./voice-capture";
@@ -57,6 +65,47 @@ type VoiceState = {
   silences?: number;
   introduced?: boolean;
 };
+
+const EXIT = /^(不预约了|不预订了|退出|结束通话|挂断|再见|算了)$/;
+
+/** The model receives scheduling context only. Credentials and contact answers
+ * always stay in the deterministic state machine. */
+export function voiceAIContext(
+  callSid: string,
+  turn: string | null,
+  digits: string,
+  speech: string,
+): BookingAIContext | null {
+  const state = currentVoiceState(callSid);
+  const text = stripSpeech(speech);
+  const withoutDates = text.replace(/\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b/g, "");
+  if (
+    !turn ||
+    !state ||
+    state.turn !== turn ||
+    digits ||
+    !text ||
+    ["id", "code", "contact"].includes(state.step) ||
+    EXIT.test(text) ||
+    isOffTopic(text) ||
+    explicitConfirmation(text) ||
+    /确认|確認|确定|確定|\bconfirm\b/i.test(text) ||
+    /电话|電話|联系|聯繫|管理码|管理碼|验证码|驗證碼|预约编号|預約編號|邮箱|郵箱|@/.test(
+      text,
+    ) ||
+    /(?:[0-9零〇一幺二两三四五六七八九][\s，,-]*){7,}/.test(withoutDates)
+  )
+    return null;
+  return {
+    channel: "phone",
+    step: state.step,
+    ...(state.action ? { action: state.action } : {}),
+    ...(state.date ? { date: state.date } : {}),
+    ...(state.court !== undefined ? { court: state.court } : {}),
+    ...(state.hour ? { hour: state.hour } : {}),
+    ...(state.duration ? { duration: state.duration } : {}),
+  };
+}
 
 function say(text: string) {
   return `<Say language="cmn-CN" voice="Polly.Zhiyu">${escapeXml(text)}</Say>`;
@@ -219,6 +268,149 @@ function afterDate(callSid: string, state: VoiceState, date: string) {
     availabilityReply(date, 0, state.duration || 2),
   );
 }
+
+function availableAISchedule(state: VoiceState): boolean {
+  if (state.action !== "change") return hasOpenSlot(state);
+  // A reschedule may overlap its own reservation. Read both local dates so a
+  // booking crossing midnight is checked against every other real reservation.
+  const times = bookingTimes(`${state.date}T${state.hour}:00`, state.duration);
+  originalBooking(state);
+  const bookings = [
+    ...listBookings(state.date!),
+    ...listBookings(instantToLocal(times.endsAt).slice(0, 10)),
+  ];
+  return !bookings.some(
+    (booking) =>
+      booking.id !== state.id &&
+      booking.status === "confirmed" &&
+      booking.courtId === state.court &&
+      Date.parse(booking.startsAt) < Date.parse(times.endsAt) &&
+      Date.parse(booking.endsAt) > Date.parse(times.startsAt),
+  );
+}
+
+/** Model output is a proposal for the pending form, never a command to write. */
+function applyVoiceInterpretation(
+  callSid: string,
+  state: VoiceState,
+  text: string,
+  interpretation: BookingInterpretation,
+): string | null {
+  if (interpretation.scope === "off_topic")
+    return respond(
+      callSid,
+      state,
+      "我只能帮助查询、创建、修改或取消网球场预约。我们继续处理您的预约。 ",
+    );
+  if (interpretation.scope !== "booking") return null;
+  let next = { ...state };
+  if (state.step === "menu") {
+    const action = parseIntent(text) || interpretation.action;
+    if (
+      !action ||
+      !["query", "book", "change", "cancel", "view"].includes(action)
+    )
+      return null;
+    next = {
+      turn: "",
+      action,
+      step: ["query", "book"].includes(action) ? "date" : "id",
+    };
+    if (next.step === "id") return respond(callSid, next);
+  }
+  if (!["query", "book", "change"].includes(next.action || "")) return null;
+  const supplied = [
+    interpretation.date,
+    interpretation.court,
+    interpretation.hour,
+    interpretation.duration,
+    interpretation.name,
+  ].some((value) => value !== null && value !== undefined);
+  if (!supplied && !interpretation.correction && state.step !== "menu")
+    return null;
+
+  const correction = interpretation.correction;
+  if (correction) {
+    const field = correction === "contact" ? "contactPhone" : correction;
+    delete next[field];
+  }
+  // Validate again at the application boundary, even when the shared client has
+  // already checked its JSON schema.
+  try {
+    if (interpretation.date !== null && interpretation.date !== undefined)
+      next.date = validateDate(interpretation.date);
+    if (interpretation.court !== null && interpretation.court !== undefined) {
+      if (
+        !(next.action === "query" ? [0, 1, 2] : [1, 2]).includes(
+          interpretation.court,
+        )
+      )
+        throw new AppError("请选择一号或二号球场");
+      next.court = interpretation.court;
+    }
+    if (interpretation.hour !== null && interpretation.hour !== undefined) {
+      if (!/^([01]\d|2[0-3])$/.test(interpretation.hour))
+        throw new AppError("只支持整点开始，请提供00至23的小时");
+      next.hour = interpretation.hour;
+    }
+    if (
+      interpretation.duration !== null &&
+      interpretation.duration !== undefined
+    )
+      next.duration = validateDuration(interpretation.duration);
+    if (interpretation.name !== null && interpretation.name !== undefined) {
+      const name = parseNameSpeech(`我叫${interpretation.name}`);
+      if (!name) throw new AppError("请只告诉我预约人的姓名");
+      next.name = name;
+    }
+  } catch (error) {
+    return respond(
+      callSid,
+      state,
+      `${channelError(error)}。请重新回答当前问题。 `,
+    );
+  }
+  if (!next.date) return respond(callSid, { ...next, step: "date" });
+  const availability = getAvailability(next.date, next.duration || 2);
+  if (
+    next.date < todayLocal() ||
+    !availability.slots.some((slot) => slot.available)
+  )
+    return respond(
+      callSid,
+      { ...next, date: undefined, step: "date" },
+      "这一天没有可预订的未来时段，请换一个日期。 ",
+    );
+  if (next.court === undefined)
+    return respond(
+      callSid,
+      { ...next, step: "court" },
+      availabilityReply(next.date, 0, next.duration || 2),
+    );
+  if (next.action === "query") {
+    if (!next.duration) return respond(callSid, { ...next, step: "duration" });
+    return menu(
+      callSid,
+      availabilityReply(next.date, next.court, next.duration),
+    );
+  }
+  if (!next.hour) return respond(callSid, { ...next, step: "hour" });
+  bookingTimes(`${next.date}T${next.hour}:00`, next.duration || 2);
+  if (!availableAISchedule(next))
+    return respond(
+      callSid,
+      { ...next, hour: undefined, step: "hour" },
+      `所选场地、开始时间或时长暂无空档。${availabilityReply(next.date, next.court, next.duration || 2)}`,
+    );
+  if (!next.duration) return respond(callSid, { ...next, step: "duration" });
+  if (!next.name) return respond(callSid, { ...next, step: "name" });
+  if (!next.contactPhone) return respond(callSid, { ...next, step: "contact" });
+  return respond(
+    callSid,
+    { ...next, step: "confirm" },
+    "已更新待确认的信息，尚未提交。 ",
+  );
+}
 function spokenNumber(value: string) {
   const normalized = value.replace(
     /[零〇一幺二两三四五六七八九]/g,
@@ -250,6 +442,7 @@ export function handleVoice(
   turn: string | null,
   digits: string,
   speech = "",
+  interpretation: BookingInterpretation | null = null,
 ) {
   if (!turn)
     return digits.trim() || speech.trim()
@@ -259,7 +452,7 @@ export function handleVoice(
   if (!state) return menu(callSid, "会话已过期，请重新开始。 ");
   if (state.turn !== turn) return recoverVoiceTurn(callSid);
   const text = stripSpeech(speech);
-  if (/^(不预约了|不预订了|退出|结束通话|挂断|再见|算了)$/.test(text)) {
+  if (EXIT.test(text)) {
     setChannelState(`voice:${callSid}`, null);
     return `${say("本次操作已结束，未提交新的预约。感谢来电。 ")}<Hangup/>`;
   }
@@ -283,6 +476,15 @@ export function handleVoice(
   }
   state = { ...state, silences: 0 };
   try {
+    if (interpretation && voiceAIContext(callSid, turn, digits, speech)) {
+      const response = applyVoiceInterpretation(
+        callSid,
+        state,
+        text,
+        interpretation,
+      );
+      if (response !== null) return response;
+    }
     switch (state.step) {
       case "menu": {
         const action =
