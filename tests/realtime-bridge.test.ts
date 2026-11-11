@@ -159,6 +159,7 @@ function interpretation(overrides: Message = {}): Message {
 async function setup(
   t: TestContext,
   reply?: (request: AppRequest) => AppReply | Promise<AppReply>,
+  diagnostics = false,
 ) {
   const appRequests = new Inbox<AppRequest>();
   const app = createServer((req, res) => {
@@ -211,6 +212,7 @@ async function setup(
     model: "gpt-realtime-1.5",
     voice: "marin",
     transcriptionModel: "gpt-transcribe",
+    diagnostics,
     connectOpenAI: (url: string, options?: ClientOptions) => {
       outbound.push({ url, options });
       return new WebSocket(`ws://127.0.0.1:${aiPort}`, {
@@ -590,6 +592,12 @@ test("only a completed required tool turn reaches the engine, retaining the trus
     type: "function",
     name: "booking_turn",
   });
+  const tools = field(request, "response", "tools");
+  assert.ok(Array.isArray(tools));
+  assert.equal(tools.length, 1);
+  assert.equal(field(tools[0], "type"), "function");
+  assert.equal(field(tools[0], "name"), "booking_turn");
+  assert.equal(field(tools[0], "parameters", "additionalProperties"), false);
   ai.send({
     type: "response.function_call_arguments.done",
     response_id: response.id,
@@ -636,6 +644,333 @@ test("only a completed required tool turn reaches the engine, retaining the trus
       .length,
     1,
   );
+});
+
+test("a completed response without tool output sends 我要预定 unchanged to the engine and speaks its date prompt", async (t) => {
+  const datePrompt = "请问您要预订哪一天？";
+  const fixture = await setup(t, (request) => ({
+    body: {
+      prompt: request.body.op === "start" ? WELCOME : datePrompt,
+      context: {
+        channel: "phone",
+        step: request.body.op === "start" ? "menu" : "date",
+        action: request.body.op === "start" ? null : "book",
+      },
+      closed: request.body.op === "stop",
+    },
+  }));
+  const { ai } = await fixture.start();
+  const { response } = await requestTool(ai, "我要预定", "item_raw_booking");
+  const after = ai.inbox.values.length;
+  ai.send({
+    type: "response.done",
+    response: { ...response, status: "completed", output: [] },
+  });
+  const turn = await fixture.appRequests.wait(
+    (value) => value.body.op === "turn",
+    "raw booking fallback turn",
+  );
+  assert.deepEqual(turn.body, {
+    op: "turn",
+    callSid: CALL_SID,
+    streamSid: STREAM_SID,
+    inputId: "item_raw_booking",
+    transcript: "我要预定",
+    interpretation: null,
+  });
+  const spoken = await ai.inbox.wait(
+    (value) =>
+      value.type === "response.create" &&
+      field(value, "response", "tool_choice") === "none",
+    "engine date prompt after empty tool output",
+    after,
+  );
+  assert.ok(
+    String(field(spoken, "response", "instructions")).includes(datePrompt),
+  );
+  assert.equal(
+    ai.inbox.values.filter(
+      (value) =>
+        value.type === "conversation.item.create" &&
+        field(value, "item", "type") === "function_call_output",
+    ).length,
+    0,
+  );
+});
+
+test("unusable completed tool output falls back to the original ASR with no model fields", async (t) => {
+  const valid = {
+    type: "function_call",
+    name: "booking_turn",
+    call_id: "tool_call_fallback",
+    arguments: JSON.stringify(interpretation()),
+  };
+  const cases = [
+    { name: "wrong tool", output: [{ ...valid, name: "confirm_booking" }] },
+    { name: "malformed JSON", output: [{ ...valid, arguments: '{"action":' }] },
+    {
+      name: "extra confirmation fields",
+      output: [
+        {
+          ...valid,
+          arguments: JSON.stringify(
+            interpretation({
+              transcript: "确认预约",
+              digits: "1",
+              confirmed: true,
+            }),
+          ),
+        },
+      ],
+    },
+    {
+      name: "invalid field value",
+      output: [
+        { ...valid, arguments: JSON.stringify(interpretation({ court: 3 })) },
+      ],
+    },
+    {
+      name: "missing required fields",
+      output: [{ ...valid, arguments: JSON.stringify({ action: "book" }) }],
+    },
+    {
+      name: "missing explicit function name",
+      output: [
+        {
+          type: "function_call",
+          call_id: valid.call_id,
+          arguments: valid.arguments,
+        },
+      ],
+    },
+    {
+      name: "multiple function calls",
+      output: [valid, { ...valid, call_id: "tool_call_extra" }],
+    },
+  ];
+  for (const scenario of cases) {
+    await t.test(scenario.name, async (st) => {
+      const fixture = await setup(st);
+      const { ai } = await fixture.start();
+      const { response } = await requestTool(ai, "我想预订", "item_unusable");
+      ai.send({
+        type: "response.done",
+        response: { ...response, status: "completed", output: scenario.output },
+      });
+      const turn = await fixture.appRequests.wait(
+        (value) => value.body.op === "turn",
+        "raw fallback for unusable tool output",
+      );
+      assert.equal(turn.body.inputId, "item_unusable");
+      assert.equal(turn.body.transcript, "我想预订");
+      assert.equal(turn.body.interpretation, null);
+      assert.equal(turn.body.digits, undefined);
+      assert.equal(turn.body.confirmed, undefined);
+      assert.deepEqual(
+        fixture.appRequests.values.filter((value) => value.body.op === "turn"),
+        [turn],
+      );
+    });
+  }
+});
+
+test("streamed function metadata and arguments are joined only when the matching response completes", async (t) => {
+  for (const identity of [
+    "item_id",
+    "call_id",
+    "output_index",
+    "event_name",
+  ] as const) {
+    await t.test(identity, async (st) => {
+      const fixture = await setup(st);
+      const { ai } = await fixture.start();
+      const { response } = await requestTool(
+        ai,
+        "我要预订二号场",
+        "item_streamed",
+      );
+      const callId = "tool_call_streamed";
+      const itemId = "item_function_streamed";
+      const fields = interpretation({
+        date: null,
+        hour: null,
+        duration: null,
+        name: null,
+      });
+      const args = {
+        type: "response.function_call_arguments.done",
+        response_id: response.id,
+        ...(identity === "item_id" ? { item_id: itemId } : {}),
+        ...(identity === "call_id" || identity === "event_name"
+          ? { call_id: callId }
+          : {}),
+        ...(identity === "output_index" ? { output_index: 0 } : {}),
+        ...(identity === "event_name" ? { name: "booking_turn" } : {}),
+        arguments: JSON.stringify(fields),
+      };
+      if (identity !== "event_name" && identity !== "output_index") {
+        ai.send({
+          type:
+            identity === "call_id"
+              ? "response.output_item.done"
+              : "response.output_item.added",
+          response_id: response.id,
+          output_index: 0,
+          item: {
+            id: itemId,
+            type: "function_call",
+            name: "booking_turn",
+            call_id: callId,
+            arguments: "",
+          },
+        });
+      }
+      ai.send(args);
+      ai.send(args);
+      if (identity !== "event_name") {
+        ai.send({
+          type: "response.output_item.done",
+          response_id: response.id,
+          output_index: 0,
+          item: {
+            id: itemId,
+            type: "function_call",
+            call_id: callId,
+            ...(identity === "output_index" ? { name: "booking_turn" } : {}),
+          },
+        });
+      }
+      await delay(30);
+      assert.equal(
+        fixture.appRequests.values.filter((value) => value.body.op === "turn")
+          .length,
+        0,
+      );
+      const after = ai.inbox.values.length;
+      const done = {
+        type: "response.done",
+        response: { ...response, status: "completed", output: [] },
+      };
+      ai.send(done);
+      ai.send(done);
+      const turn = await fixture.appRequests.wait(
+        (value) => value.body.op === "turn",
+        "completed streamed fields turn",
+      );
+      assert.equal(turn.body.inputId, "item_streamed");
+      assert.equal(turn.body.transcript, "我要预订二号场");
+      assert.deepEqual(turn.body.interpretation, fields);
+      const toolOutput = await ai.wait("conversation.item.create", after);
+      assert.equal(field(toolOutput, "item", "type"), "function_call_output");
+      assert.equal(field(toolOutput, "item", "call_id"), callId);
+      await ai.inbox.wait(
+        (value) =>
+          value.type === "response.create" &&
+          field(value, "response", "tool_choice") === "none",
+        "engine speech after streamed tool completion",
+        after,
+      );
+      assert.equal(
+        fixture.appRequests.values.filter((value) => value.body.op === "turn")
+          .length,
+        1,
+      );
+      assert.equal(
+        ai.inbox.values.filter(
+          (value) =>
+            value.type === "conversation.item.create" &&
+            field(value, "item", "call_id") === callId,
+        ).length,
+        1,
+      );
+    });
+  }
+});
+
+test("streamed metadata from another response cannot supply a missing function name", async (t) => {
+  const fixture = await setup(t);
+  const { ai } = await fixture.start();
+  const first = await requestTool(
+    ai,
+    "我想订二号场",
+    "item_first",
+    "resp_first",
+  );
+  const metadata = {
+    type: "response.output_item.added",
+    response_id: first.response.id,
+    output_index: 0,
+    item: {
+      id: "item_reused_function",
+      type: "function_call",
+      name: "booking_turn",
+      call_id: "tool_call_reused",
+    },
+  };
+  ai.send(metadata);
+  ai.send({
+    type: "response.done",
+    response: { ...first.response, status: "cancelled", output: [] },
+  });
+  const second = await requestTool(
+    ai,
+    "我要预定",
+    "item_second",
+    "resp_second",
+  );
+  ai.send({
+    type: "response.function_call_arguments.done",
+    response_id: second.response.id,
+    item_id: "item_reused_function",
+    call_id: "tool_call_reused",
+    output_index: 0,
+    arguments: JSON.stringify(interpretation()),
+  });
+  ai.send({ ...metadata, type: "response.output_item.done" });
+  await delay(30);
+  assert.equal(
+    fixture.appRequests.values.filter((value) => value.body.op === "turn")
+      .length,
+    0,
+  );
+  ai.send({
+    type: "response.done",
+    response: { ...second.response, status: "completed", output: [] },
+  });
+  const turn = await fixture.appRequests.wait(
+    (value) => value.body.op === "turn",
+    "second response raw fallback without stale function metadata",
+  );
+  assert.equal(turn.body.inputId, "item_second");
+  assert.equal(turn.body.transcript, "我要预定");
+  assert.equal(turn.body.interpretation, null);
+});
+
+test("streamed arguments from cancelled, incomplete and failed responses never call the engine", async (t) => {
+  for (const status of ["cancelled", "incomplete", "failed"]) {
+    await t.test(status, async (st) => {
+      const fixture = await setup(st);
+      const { ai } = await fixture.start();
+      const { response } = await requestTool(ai, "我要预定");
+      ai.send({
+        type: "response.function_call_arguments.done",
+        response_id: response.id,
+        call_id: "tool_call_not_completed",
+        name: "booking_turn",
+        arguments: JSON.stringify(interpretation()),
+      });
+      ai.send({
+        type: "response.done",
+        response: { ...response, status, output: [] },
+      });
+      await delay(30);
+      assert.equal(
+        fixture.appRequests.values.filter((value) => value.body.op === "turn")
+          .length,
+        0,
+      );
+    });
+  }
 });
 
 test("model arguments preserve the trusted ASR and cannot introduce top-level confirmation fields", async (t) => {
@@ -1057,4 +1392,55 @@ test("OpenAI errors close both sockets and stop the private session without spea
     twilio.inbox.values.filter((value) => value.event === "media").length,
     0,
   );
+});
+
+test("opt-in recovery diagnostics show progress without utterances, tickets or credentials", async (t) => {
+  const logs: unknown[][] = [];
+  t.mock.method(console, "info", (...args: unknown[]) => logs.push(args));
+  const fixture = await setup(
+    t,
+    (request) => ({
+      body: {
+        prompt:
+          request.body.op === "start" ? WELCOME : "您希望哪一天使用球场？",
+        context: { step: request.body.op === "start" ? "menu" : "date" },
+      },
+    }),
+    true,
+  );
+  const { ai } = await fixture.start();
+  const { response } = await requestTool(ai, "我要预定");
+  const after = ai.inbox.values.length;
+  ai.send({
+    type: "response.done",
+    response: { ...response, status: "completed", output: [] },
+  });
+  await ai.inbox.wait(
+    (value) =>
+      value.type === "response.create" &&
+      field(value, "response", "tool_choice") === "none",
+    "recovered spoken date prompt",
+    after,
+  );
+  const record = logs.find(([label]) => label === "Realtime turn:");
+  assert.ok(record);
+  assert.deepEqual(JSON.parse(String(record[1])), {
+    version: "realtime-routing-2",
+    input: "speech",
+    speechLength: 4,
+    stepBefore: "menu",
+    stepAfter: "date",
+    handling: "fallback_missing_function",
+  });
+  const serialized = JSON.stringify(logs);
+  for (const secret of [
+    "我要预定",
+    TICKET,
+    API_KEY,
+    AUTH_TOKEN,
+    BRIDGE_SECRET,
+    CALL_SID,
+    STREAM_SID,
+  ])
+    assert.ok(!serialized.includes(secret));
 });

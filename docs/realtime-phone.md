@@ -83,6 +83,18 @@ https://你的隧道域名/api/webhooks/voice
 
 仓库自动化测试使用模拟OpenAI和Twilio事件，验证受控预约流程、签名与内部认证、音频转发和中断处理。本次没有用你的真实账号、号码或手机验证通话，必须完成上述本机验收后再给客户使用。
 
+### 说“我要预定”却没有进入预约时
+
+先更新代码并停止旧服务，再运行 `npm run sms:local -- --diagnose`（只需要电话时可用 `npm run phone:diagnose`）。新版兼容分开到达的Realtime函数事件；某轮没有有效函数结果时，将原始语音转写交给预约程序继续处理。“我要预定”应进入日期追问，之后可以回答“明天”，逐项补齐信息。
+
+终端会输出不含原话的状态，例如：
+
+```text
+Realtime turn: {"version":"realtime-routing-2","input":"speech","speechLength":4,"stepBefore":"menu","stepAfter":"date","handling":"fallback_missing_function"}
+```
+
+`handling=function` 表示使用模型字段；`fallback_missing_function` 或 `fallback_invalid_fields` 表示使用原始转写处理，仍会进行身份、确认和数据库检查。`stepBefore=menu`、`stepAfter=date` 表示已经进入预约日期步骤。若仍有问题，可提供这两三行状态和错误码；不要发送密钥、音频、完整转写、客户资料或管理码。
+
 ## 数据范围与费用
 
 Realtime模式会把**通话音频直接发送给OpenAI**，其中可能包含姓名、联系方式、预约编号、管理码及其他来电者说出的内容。输入音频还会交给配置的转写模型处理。服务器控制预约结果，不等于敏感内容只留在本机；Gather文本模式中“收集联系方式时不调用模型”的范围不适用于Realtime。

@@ -92,6 +92,7 @@ class FakeProvider {
   readonly messages = new Inbox<Message>();
   readonly prompts = new Inbox<string>();
   toolResponses = 0;
+  omitFunctionCalls = false;
   private sequence = 0;
 
   constructor(readonly socket: WebSocket) {
@@ -130,14 +131,15 @@ class FakeProvider {
             name: "booking_turn",
           });
           this.toolResponses += 1;
-          output = [
-            {
-              type: "function_call",
-              name: "booking_turn",
-              call_id: `call_integration_${this.sequence}`,
-              arguments: JSON.stringify(fields),
-            },
-          ];
+          if (!this.omitFunctionCalls)
+            output = [
+              {
+                type: "function_call",
+                name: "booking_turn",
+                call_id: `call_integration_${this.sequence}`,
+                arguments: JSON.stringify(fields),
+              },
+            ];
         }
         this.send({
           type: "response.done",
@@ -484,11 +486,10 @@ async function internal(body: Message, authorized = true) {
   });
 }
 
-async function schedule(): Promise<Availability> {
-  const response = await fetch(
-    `${appUrl}/api/availability?date=${bookingDate}`,
-    { signal: AbortSignal.timeout(5_000) },
-  );
+async function schedule(date = bookingDate): Promise<Availability> {
+  const response = await fetch(`${appUrl}/api/availability?date=${date}`, {
+    signal: AbortSignal.timeout(5_000),
+  });
   assert.equal(response.status, 200);
   return response.json() as Promise<Availability>;
 }
@@ -716,5 +717,115 @@ test(
       (await schedule()).courts.flatMap((court) => court.bookings).length,
       1,
     );
+  },
+);
+
+test(
+  "a completed provider response without a function call lets raw booking speech progress and commit once through production",
+  { timeout: 20_000 },
+  async () => {
+    const date = "2099-12-02";
+    const call = await ticketedCall();
+    const providerCursor = providers.values.length;
+    const twilio = await connect();
+    assert.equal(twilio.status, 101);
+    start(twilio.socket, call);
+    const provider = await providers.wait(
+      () => true,
+      "provider for raw-speech booking",
+      providerCursor,
+    );
+    provider.omitFunctionCalls = true;
+    await provider.prompts.wait(
+      (prompt) => /欢迎使用/.test(prompt),
+      "raw-speech booking greeting",
+    );
+
+    const bookings = async () =>
+      (await schedule(date)).courts.flatMap((court) => court.bookings);
+    const answer = async (
+      id: string,
+      transcript: string,
+      expected: RegExp,
+      description: string,
+    ) => {
+      const cursor = provider.prompts.values.length;
+      provider.transcript(id, transcript);
+      return provider.prompts.wait(
+        (prompt) => expected.test(prompt),
+        description,
+        cursor,
+      );
+    };
+
+    assert.equal((await bookings()).length, 0);
+    // Every interpretation response completes with output: []; each answer
+    // must reach the real booking engine as its original raw transcription.
+    await answer("raw_intent", "我要预定", /哪一天/, "booking date question");
+    assert.equal(provider.toolResponses, 1);
+    assert.equal((await bookings()).length, 0);
+    const available = await answer(
+      "raw_date",
+      "2099年12月2日",
+      /请选择|选择一号球场/,
+      "available courts after the raw date",
+    );
+    assert.match(available, /可开始时间/);
+    assert.match(available, /1号场/);
+    assert.match(available, /2号场/);
+    assert.equal((await bookings()).length, 0);
+    await answer("raw_court", "一号球场", /几点开始/, "start time question");
+    assert.equal((await bookings()).length, 0);
+    await answer("raw_hour", "下午三点", /预订几个小时/, "duration question");
+    assert.equal((await bookings()).length, 0);
+    await answer(
+      "raw_duration",
+      "默认",
+      /预约人的姓名/,
+      "public name question",
+    );
+    assert.equal((await bookings()).length, 0);
+    await answer("raw_name", "我叫李四", /请提供联系电话/, "contact question");
+    assert.equal((await bookings()).length, 0);
+    assert.equal(provider.toolResponses, 6);
+    const review = await answer(
+      "raw_contact",
+      "使用来电号码",
+      /确认无误/,
+      "uncommitted raw-speech booking review",
+    );
+    assert.match(review, /预约人李四/);
+    assert.match(review, /2小时/);
+    assert.equal((await bookings()).length, 0);
+    await answer(
+      "raw_confirm",
+      "确认预约",
+      /网站日程已更新/,
+      "raw-speech booking committed after confirmation",
+    );
+    assert.equal(
+      provider.toolResponses,
+      6,
+      "contact and confirmation bypass the provider's missing function calls",
+    );
+    const committed = await bookings();
+    assert.equal(committed.length, 1);
+    assert.equal(committed[0].customerName, "李四");
+    assert.equal(committed[0].courtId, 1);
+    assert.equal(committed[0].startsAt, "2099-12-02T04:00:00Z");
+    assert.equal(
+      Date.parse(committed[0].endsAt) - Date.parse(committed[0].startsAt),
+      7_200_000,
+    );
+
+    // A following raw answer is a barrier for the duplicate confirmation.
+    provider.transcript("raw_confirm", "确认预约");
+    await answer("raw_after_replay", "不确认", /请告诉我/, "turn after replay");
+    assert.equal((await bookings()).length, 1);
+    twilio.socket.send(
+      JSON.stringify({ event: "stop", streamSid: call.streamSid }),
+    );
+    await closed(twilio.socket);
+    await closed(provider.socket);
   },
 );

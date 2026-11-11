@@ -257,6 +257,9 @@ try {
         model: realtimeModel,
         voice: realtimeVoice,
         transcriptionModel,
+        diagnostics:
+          process.argv.includes("--diagnose") ||
+          process.env.VOICE_DEBUG === "1",
       });
     }
     const childEnvironment = {
@@ -354,7 +357,9 @@ try {
       console.log(voiceModeStatus);
       if (childEnvironment.VOICE_DEBUG === "1")
         console.log(
-          "Voice diagnostics enabled: callback metadata only; speech text and contact details are never printed.",
+          realtimeEnabled
+            ? "Realtime diagnostics enabled: routing and step metadata only; audio, speech text and contact details are never printed."
+            : "Voice diagnostics enabled: callback metadata only; speech text and contact details are never printed.",
         );
       console.log(
         `Twilio Voice webhook (POST): ${external.origin}/api/webhooks/voice`,
