@@ -10,6 +10,10 @@ import {
 } from "@/lib/channels/booking-ai";
 import { logVoiceCallback } from "@/lib/channels/voice-diagnostics";
 import {
+  createRealtimeVoice,
+  realtimeVoiceEnabled,
+} from "@/lib/channels/realtime";
+import {
   verifiedTwilioForm,
   webhookFailure,
   xmlResponse,
@@ -34,6 +38,16 @@ export async function POST(request: Request) {
     const callSid = form.get("CallSid");
     if (!callSid || !/^[A-Za-z0-9]{10,64}$/.test(callSid))
       throw new AppError("缺少通话编号", 400);
+    if (process.env.VOICE_MODE === "realtime") {
+      if (!realtimeVoiceEnabled())
+        throw new AppError("实时电话渠道尚未配置", 503);
+      return xmlResponse(
+        runChannelEvent(`voice:${callSid}:initial`, () => {
+          rateLimit(`voice:${form.get("From")}`, 200, 3_600_000);
+          return createRealtimeVoice(callSid, form.get("From")!);
+        }),
+      );
+    }
     const turn = new URL(request.url).searchParams.get("turn");
     const digits = form.get("Digits") || "";
     const speech = form.get("SpeechResult") || "";

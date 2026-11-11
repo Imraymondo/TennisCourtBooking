@@ -2,11 +2,17 @@ import { createServer, request as httpRequest } from "node:http";
 
 // Voice and explicitly enabled SMS callbacks can cross the tunnel. The website
 // and staff endpoints remain local; email is not enabled by this relay.
+/**
+ * @param {{ upstreamPort: number, deadlineMs?: number, maxBodyBytes?: number,
+ * allowSms?: boolean, realtimeUpgrade?: (request: import('node:http').IncomingMessage,
+ * socket: import('node:stream').Duplex, head: Buffer) => void }} options
+ */
 export function createVoiceRelay({
   upstreamPort,
   deadlineMs = 10_000,
   maxBodyBytes = 32_768,
   allowSms = false,
+  realtimeUpgrade,
 }) {
   if (
     !Number.isInteger(upstreamPort) ||
@@ -161,7 +167,14 @@ export function createVoiceRelay({
       });
     },
   );
-  server.on("upgrade", (_request, socket) => {
+  server.on("upgrade", (request, socket, head) => {
+    if (
+      request.url === "/api/realtime/voice" &&
+      typeof realtimeUpgrade === "function"
+    ) {
+      realtimeUpgrade(request, socket, head);
+      return;
+    }
     socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
   });
   return server;

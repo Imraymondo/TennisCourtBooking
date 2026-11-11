@@ -11,6 +11,7 @@ const receivingNumber = "+61255550100";
 const callerNumber = "+61400123456";
 const originalInfo = console.info;
 const environmentNames = [
+  "VOICE_MODE",
   "BOOKING_AI_ENABLED",
   "BOOKING_DB_PATH",
   "APP_BASE_URL",
@@ -51,6 +52,7 @@ function records(): Diagnostic[] {
 }
 
 beforeEach(() => {
+  process.env.VOICE_MODE = "gather";
   process.env.BOOKING_AI_ENABLED = "0";
   closeDatabase();
   process.env.BOOKING_DB_PATH = ":memory:";

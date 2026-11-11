@@ -14,25 +14,28 @@
     "phone:diagnose": "node scripts/phone-local.mjs --diagnose",
     "sms:local": "node scripts/phone-local.mjs --sms",
     "ai:check": "node --import tsx scripts/check-openai.ts",
+    "realtime:check": "node scripts/check-realtime.mjs",
     "build": "next build",
     "start": "node scripts/start-production.mjs",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "next typegen && tsc --noEmit",
     "check": "npm run lint && npm run typecheck",
     "test": "node --import tsx --test tests/*.test.ts",
-    "test:integration": "node --import tsx --test tests/api.integration.ts tests/deployment.integration.ts tests/local-phone.integration.ts"
+    "test:integration": "node --import tsx --test tests/api.integration.ts tests/deployment.integration.ts tests/local-phone.integration.ts tests/realtime.integration.ts"
   },
   "dependencies": {
     "@js-temporal/polyfill": "0.5.1",
     "next": "16.4.5",
     "react": "19.3.1",
-    "react-dom": "19.3.1"
+    "react-dom": "19.3.1",
+    "ws": "8.22.2"
   },
   "devDependencies": {
     "@ngrok/ngrok": "1.7.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/ws": "8.18.2",
     "eslint": "9.39.5",
     "eslint-config-next": "16.4.5",
     "tsx": "4.20.6",

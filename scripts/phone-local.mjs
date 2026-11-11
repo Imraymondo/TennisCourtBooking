@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,12 @@ const enableSms = process.argv.includes("--sms");
 const aiSetting = process.env.BOOKING_AI_ENABLED || "0";
 const bookingAiEnabled = aiSetting === "1";
 const bookingAiModel = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const voiceMode = process.env.VOICE_MODE || "gather";
+const realtimeEnabled = voiceMode === "realtime";
+const realtimeModel = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime-1.5";
+const realtimeVoice = process.env.OPENAI_REALTIME_VOICE || "marin";
+const transcriptionModel =
+  process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL || "gpt-transcribe";
 const errors = [];
 const [major, minor] = process.versions.node.split(".").map(Number);
 if (major !== 24 || minor < 5)
@@ -41,13 +48,45 @@ if (!Number.isInteger(webPort) || webPort < 1 || webPort > 65535)
   errors.push("PHONE_WEB_PORT must be an integer from 1 to 65535.");
 if (!["0", "1"].includes(aiSetting))
   errors.push("BOOKING_AI_ENABLED must be 0 or 1.");
+if (!["gather", "realtime"].includes(voiceMode))
+  errors.push("VOICE_MODE must be gather or realtime.");
 if (bookingAiEnabled && !process.env.OPENAI_API_KEY?.trim())
   errors.push(
     "Missing OPENAI_API_KEY: add it to your computer's .env.local when BOOKING_AI_ENABLED is 1.",
   );
+if (realtimeEnabled && !process.env.OPENAI_API_KEY?.trim())
+  errors.push(
+    "Missing OPENAI_API_KEY: add it to your computer's .env.local when VOICE_MODE is realtime.",
+  );
 if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(bookingAiModel))
   errors.push(
     "OPENAI_MODEL must be a valid model identifier using safe characters only.",
+  );
+for (const [name, value] of [
+  ["OPENAI_REALTIME_MODEL", realtimeModel],
+  ["OPENAI_REALTIME_TRANSCRIBE_MODEL", transcriptionModel],
+]) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(value))
+    errors.push(
+      `${name} must be a valid model identifier using safe characters only.`,
+    );
+}
+if (
+  ![
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "sage",
+    "shimmer",
+    "verse",
+    "marin",
+    "cedar",
+  ].includes(realtimeVoice)
+)
+  errors.push(
+    "OPENAI_REALTIME_VOICE must be a supported built-in Realtime voice.",
   );
 if (
   process.env.NGROK_DOMAIN &&
@@ -77,6 +116,9 @@ if (errors.length) {
 const bookingLanguageStatus = bookingAiEnabled
   ? `Booking language: GPT (model ${bookingAiModel})`
   : "Booking language: rule-based";
+const voiceModeStatus = realtimeEnabled
+  ? `Voice mode: OpenAI Realtime (model ${realtimeModel})`
+  : "Voice mode: Twilio Gather";
 if (process.argv.includes("--check")) {
   console.log(
     "Required local settings are present; no credential values were displayed.",
@@ -85,6 +127,7 @@ if (process.argv.includes("--check")) {
     "This check does not connect to ngrok, verify provider accounts, or place a call.",
   );
   console.log(bookingLanguageStatus);
+  console.log(voiceModeStatus);
   if (enableSms)
     console.log(
       "SMS callback forwarding requested; verify SMS capability in the Twilio console before testing.",
@@ -95,6 +138,7 @@ if (process.argv.includes("--check")) {
 let relay;
 let listener;
 let app;
+let realtimeBridge;
 let stopping = false;
 async function stop(code = 0) {
   if (stopping) return;
@@ -102,6 +146,13 @@ async function stop(code = 0) {
   if (listener) {
     try {
       await Promise.race([listener.close(), delay(2_000)]);
+    } catch {
+      /* already closed */
+    }
+  }
+  if (realtimeBridge) {
+    try {
+      await Promise.race([realtimeBridge.close(), delay(2_000)]);
     } catch {
       /* already closed */
     }
@@ -132,7 +183,20 @@ try {
     probe.listen(webPort, "127.0.0.1", done);
   });
   await new Promise((done) => probe.close(done));
-  relay = createVoiceRelay({ upstreamPort: webPort, allowSms: enableSms });
+  relay = createVoiceRelay({
+    upstreamPort: webPort,
+    allowSms: enableSms,
+    ...(realtimeEnabled
+      ? {
+          realtimeUpgrade: (request, socket, head) => {
+            if (realtimeBridge)
+              realtimeBridge.handleUpgrade(request, socket, head);
+            else
+              socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+          },
+        }
+      : {}),
+  });
   await new Promise((done, reject) => {
     relay.once("error", reject);
     relay.listen(0, "127.0.0.1", done);
@@ -179,6 +243,22 @@ try {
   if (stopping) {
     await listener.close();
   } else {
+    const bridgeSecret = realtimeEnabled
+      ? randomBytes(32).toString("base64url")
+      : "";
+    if (realtimeEnabled) {
+      const { createRealtimeBridge } = await import("./realtime-bridge.mjs");
+      realtimeBridge = createRealtimeBridge({
+        appUrl: `http://127.0.0.1:${webPort}`,
+        publicOrigin: external.origin,
+        authToken: process.env.TWILIO_AUTH_TOKEN,
+        bridgeSecret,
+        apiKey: process.env.OPENAI_API_KEY,
+        model: realtimeModel,
+        voice: realtimeVoice,
+        transcriptionModel,
+      });
+    }
     const childEnvironment = {
       ...process.env,
       NODE_ENV: "development",
@@ -186,6 +266,11 @@ try {
         ? "1"
         : process.env.VOICE_DEBUG || "0",
       APP_BASE_URL: external.origin,
+      VOICE_MODE: voiceMode,
+      OPENAI_REALTIME_MODEL: realtimeModel,
+      OPENAI_REALTIME_VOICE: realtimeVoice,
+      OPENAI_REALTIME_TRANSCRIBE_MODEL: transcriptionModel,
+      REALTIME_BRIDGE_SECRET: bridgeSecret,
       BOOKING_DB_PATH: resolve(
         root,
         process.env.BOOKING_DB_PATH || ".data/bookings.sqlite",
@@ -253,8 +338,20 @@ try {
         if (warm.status !== 403)
           throw new Error("Webhook signature validation is not ready");
       }
+      if (realtimeEnabled) {
+        // Compile the private engine route before the first Media Stream starts.
+        // An unauthenticated probe cannot create a session or contact OpenAI.
+        const warm = await fetch(
+          `http://127.0.0.1:${webPort}/api/realtime/turn`,
+          { method: "POST", signal: AbortSignal.timeout(15_000) },
+        );
+        await warm.arrayBuffer();
+        if (warm.status !== 403)
+          throw new Error("Realtime bridge authentication is not ready");
+      }
       console.log(`Local website: http://127.0.0.1:${webPort}`);
       console.log(bookingLanguageStatus);
+      console.log(voiceModeStatus);
       if (childEnvironment.VOICE_DEBUG === "1")
         console.log(
           "Voice diagnostics enabled: callback metadata only; speech text and contact details are never printed.",
@@ -262,14 +359,16 @@ try {
       console.log(
         `Twilio Voice webhook (POST): ${external.origin}/api/webhooks/voice`,
       );
+      if (realtimeEnabled)
+        console.log(
+          `Realtime audio stream: ${external.origin.replace(/^https:/, "wss:")}/api/realtime/voice`,
+        );
       if (enableSms)
         console.log(
           `Twilio Messaging webhook (POST): ${external.origin}/api/webhooks/sms`,
         );
       console.log(
-        enableSms
-          ? "Only signed voice and SMS webhook requests are forwarded. The public endpoint does not expose the website, staff pages or email webhook."
-          : "Only signed voice webhook requests are forwarded. The public endpoint does not expose the website or staff pages.",
+        `Only signed ${enableSms ? "voice and SMS" : "voice"} webhook requests${realtimeEnabled ? " and the authenticated Realtime audio stream" : ""} are forwarded. The public endpoint does not expose the website, staff pages or internal booking API.`,
       );
       console.log(
         "Set the Voice URL under the Twilio number's Voice > A CALL COMES IN > Webhook > HTTP POST, then call your Twilio number.",

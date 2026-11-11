@@ -66,6 +66,8 @@ before(
     }
     Object.assign(environment, {
       BOOKING_AI_ENABLED: "0",
+      VOICE_MODE: "gather",
+      REALTIME_BRIDGE_SECRET: "",
       OPENAI_API_KEY: "",
       NODE_ENV: "production",
       NEXT_TELEMETRY_DISABLED: "1",

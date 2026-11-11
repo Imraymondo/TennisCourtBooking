@@ -21,6 +21,7 @@ import {
 } from "../lib/store";
 
 beforeEach(() => {
+  process.env.VOICE_MODE = "gather";
   closeDatabase();
   process.env.BOOKING_DB_PATH = ":memory:";
   process.env.APP_BASE_URL = "https://courts.example";

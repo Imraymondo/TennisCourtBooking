@@ -37,6 +37,22 @@ npm run phone:local
 
 将命令实际输出的VoiceWebhook地址填入Twilio号码的来电配置，选择POST，再拨打该号码。无需Render账号或购买域名；保持电脑和终端运行。详见[本机真实电话接入步骤](docs/local-phone.md)。
 
+### 让GPT直接听电话和说话：OpenAI Realtime
+
+在已有本机Twilio和ngrok配置中添加以下服务端设置。默认仍为 `VOICE_MODE=gather`；选择 `realtime` 后，Twilio通过双向音频流把电话音频交给OpenAI Realtime，GPT生成语音回复，预约规则和写入仍由本机程序与同一个SQLite数据库控制。
+
+```dotenv
+VOICE_MODE=realtime
+OPENAI_API_KEY=这里填写自己的OpenAI项目API密钥
+OPENAI_REALTIME_MODEL=gpt-realtime-1.5
+OPENAI_REALTIME_VOICE=marin
+OPENAI_REALTIME_TRANSCRIBE_MODEL=gpt-transcribe
+```
+
+先开通[OpenAI API账号与独立计费](https://platform.openai.com)，在自己电脑已有的 `.env.local` 中填写密钥，然后停止旧服务，运行 `npm ci --include=dev`、`npm run phone:check` 和 `npm run phone:local`。Twilio的Voice URL仍使用终端输出的 **HTTPS POST `/api/webhooks/voice`**，音频WebSocket由系统自动连接。无需公开网站或后台，也不需要部署到云服务器。
+
+Realtime不依赖 `BOOKING_AI_ENABLED`；该开关继续控制短信和Gather模式的可选文本理解。`OPENAI_MODEL` 继续使用Responses API文本模型，不能填Realtime模型。Realtime会把通话音频发送给OpenAI，其中可能包含姓名、电话、预约编号或管理码；API音频、输入转写与Twilio通话分别计费。预检和模拟测试不能证明真实电话已接通。完整账号设置、手机验收、隐私说明和切回方法见[Realtime电话接入](docs/realtime-phone.md)。
+
 ### 本机同时接收电话和短信
 
 需要短信时，在原服务的终端按 **Ctrl+C** 停止，再更新代码并启动：
@@ -52,9 +68,9 @@ npm run sms:local
 
 手机先发送“帮助”，再查询未来日期、预订、修改和取消；本机网页会显示同一份日程。默认使用固定短信指令；可按下节配置GPT理解预约自然语言。完整步骤、指令示例及无回复排查见[本机真实短信接入与测试](docs/local-sms.md)。自动化测试只模拟短信回调，尚不能证明真实手机短信已接通。
 
-### 可选：让电话和短信使用GPT理解预约
+### 可选：让Gather电话和短信使用GPT理解预约文本
 
-默认 `BOOKING_AI_ENABLED=0`，不需要OpenAI账号。启用后，GPT从电话语音转写或短信中提取预约意图与字段，程序继续查询同一个SQLite数据库，并在自然语言预约、修改或取消写入前向客户复述，等待下一轮明确确认。电话仍由Twilio识别语音和播报，不使用OpenAI实时音频；原有固定短信及邮件指令继续可用，邮件本次不接入GPT。
+默认 `BOOKING_AI_ENABLED=0`。这一文本理解功能从Gather电话语音转写或短信中提取预约意图与字段，程序继续查询同一个SQLite数据库，并在自然语言预约、修改或取消写入前向客户复述，等待下一轮明确确认。`VOICE_MODE=gather` 时由Twilio识别语音和播报；直接使用OpenAI音频应按上节启用Realtime。原有固定短信及邮件指令继续可用，邮件本次不接入GPT。
 
 如果尚无OpenAI API账号，先到 [OpenAI开发者平台](https://platform.openai.com) 注册，开通**独立于ChatGPT订阅的API计费**，再在项目中[创建API key](https://platform.openai.com/api-keys)。仅在自己电脑现有的 `.env.local` 中补充：
 
@@ -82,20 +98,21 @@ OPENAI_MODEL=gpt-4.1-mini
 
 ## 命令与验证
 
-| 命令                       | 用途                                     |
-| -------------------------- | ---------------------------------------- |
-| `npm ci`                   | 按锁文件安装                             |
-| `npm run dev`              | 开发服务                                 |
-| `npm run phone:check`      | 检查本机电话配置，不联网、不显示凭据值   |
-| `npm run phone:local`      | 启动本机网站和仅转发电话回调的临时隧道   |
-| `npm run sms:local`        | 启动同一本机网站，转发电话和短信回调     |
-| `npm run ai:check`         | 用一次API请求检查GPT理解，不创建预约     |
-| `npm run phone:diagnose`   | 启动电话服务并输出不含语音原文的诊断状态 |
-| `npm run check`            | ESLint与TypeScript                       |
-| `npm test`                 | 业务、时区、并发、持久化和渠道测试       |
-| `npm run build`            | 生产构建                                 |
-| `npm run test:integration` | 构建后启动隔离生产服务，验证真实HTTP API |
-| `npm start`                | 生产服务                                 |
+| 命令                       | 用途                                          |
+| -------------------------- | --------------------------------------------- |
+| `npm ci`                   | 按锁文件安装                                  |
+| `npm run dev`              | 开发服务                                      |
+| `npm run phone:check`      | 检查本机电话配置，不联网、不显示凭据值        |
+| `npm run phone:local`      | 启动本机网站和仅转发电话回调的临时隧道        |
+| `npm run sms:local`        | 启动同一本机网站，转发电话和短信回调          |
+| `npm run ai:check`         | 检查Responses API文本理解；不验证Realtime音频 |
+| `npm run realtime:check`   | 检查Realtime音频会话连接，不创建预约          |
+| `npm run phone:diagnose`   | 启动电话服务并输出不含语音原文的诊断状态      |
+| `npm run check`            | ESLint与TypeScript                            |
+| `npm test`                 | 业务、时区、并发、持久化和渠道测试            |
+| `npm run build`            | 生产构建                                      |
+| `npm run test:integration` | 构建后启动隔离生产服务，验证真实HTTP API      |
+| `npm start`                | 生产服务                                      |
 
 ```bash
 npm run check
@@ -125,7 +142,7 @@ npm start
 
 系统校验Twilio签名及接收号码，重试相同事件时复用结果。`TWILIO_AUTH_TOKEN` 用于本地签名校验，必须直接提供给应用，不能使用仅在出站代理替换的占位符。
 
-电话使用 Twilio 语音识别和预约专用状态机，默认不需要额外语言模型账号；可选GPT配置见[接入步骤](docs/openai-booking.md)。客户可以直接说“我要预约明天下午三点的二号球场”。系统读取数据库中的真实空档，逐步补齐日期、场地、时间、时长、姓名和联系电话；使用来电号码也必须由客户明确选择。写入前会复述完整信息，仅在客户说“确认预约”或按1后提交。无关问题、含糊确认、否定、信息缺失和时段冲突不会创建预约。客户也可用语音查询、修改、取消预约，并保留按键输入方式。预约编号与管理码会读出，请客户记录；成功后网站日程接口立即更新，已经打开的页面会在自动刷新时显示。
+电话默认使用Twilio语音识别和预约专用状态机，不需要额外语言模型账号；可选[Gather文本理解](docs/openai-booking.md)或[OpenAI Realtime直接音频](docs/realtime-phone.md)。客户可以直接说“我要预约明天下午三点的二号球场”。系统读取数据库中的真实空档，逐步补齐日期、场地、时间、时长、姓名和联系电话；使用来电号码也必须由客户明确选择。写入前会复述完整信息，仅在客户说“确认预约”或按1后提交。无关问题、含糊确认、否定、信息缺失和时段冲突不会创建预约。客户也可用语音查询、修改、取消预约，并保留按键输入方式。预约编号与管理码会读出，请客户记录；成功后网站日程接口立即更新，已经打开的页面会在自动刷新时显示。
 
 短信指令（日期为 `YYYY-MM-DD`，姓名不含空格，末尾时长省略时默认为2小时）：
 

@@ -8,6 +8,10 @@ Object.assign(process.env, { NODE_ENV: "development" });
 loadEnvConfig(process.cwd(), true);
 
 async function main() {
+  if (process.env.VOICE_MODE === "realtime")
+    console.log(
+      "This check only validates Responses API booking text understanding. It does not validate Realtime model access or a live audio call; see docs/realtime-phone.md.",
+    );
   if (!bookingAIEnabled()) {
     console.error(
       "Set BOOKING_AI_ENABLED=1 and OPENAI_API_KEY in your computer's .env.local before checking GPT.",

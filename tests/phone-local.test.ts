@@ -14,6 +14,11 @@ const fakeSettings = {
   BOOKING_AI_ENABLED: "0",
   OPENAI_API_KEY: "",
   OPENAI_MODEL: "",
+  VOICE_MODE: "gather",
+  OPENAI_REALTIME_MODEL: "",
+  OPENAI_REALTIME_VOICE: "",
+  OPENAI_REALTIME_TRANSCRIBE_MODEL: "",
+  REALTIME_BRIDGE_SECRET: "",
 };
 
 // The check is deliberately run with fake credentials. Block side effects in the
@@ -36,7 +41,7 @@ function check(
     syncBuiltinESMExports();
     registerHooks({
       resolve(specifier, context, nextResolve) {
-        if (specifier.includes("@ngrok/ngrok")) blocked();
+        if (specifier.includes("@ngrok/ngrok") || specifier.includes("realtime-bridge.mjs")) blocked();
         return nextResolve(specifier, context);
       }
     });
@@ -69,7 +74,7 @@ function check(
 function assertPrivate(
   output: string,
   values = Object.entries(fakeSettings)
-    .filter(([name]) => name !== "BOOKING_AI_ENABLED")
+    .filter(([name]) => !["BOOKING_AI_ENABLED", "VOICE_MODE"].includes(name))
     .map(([, value]) => value),
 ) {
   for (const value of values.filter(Boolean)) {
@@ -109,6 +114,7 @@ test("valid fake settings pass a non-network check without revealing any values"
   assert.equal(result.status, 0, result.output);
   assert.ok(result.output.includes("does not connect"));
   assert.ok(result.output.includes("Booking language: rule-based"));
+  assert.ok(result.output.includes("Voice mode: Twilio Gather"));
   assertPrivate(result.output);
 });
 
@@ -117,6 +123,11 @@ test("empty/off AI test settings override inherited environment values without e
     "BOOKING_AI_ENABLED",
     "OPENAI_API_KEY",
     "OPENAI_MODEL",
+    "VOICE_MODE",
+    "OPENAI_REALTIME_MODEL",
+    "OPENAI_REALTIME_VOICE",
+    "OPENAI_REALTIME_TRANSCRIBE_MODEL",
+    "REALTIME_BRIDGE_SECRET",
   ] as const;
   const saved = Object.fromEntries(
     names.map((name) => [name, process.env[name]]),
@@ -126,16 +137,143 @@ test("empty/off AI test settings override inherited environment values without e
     process.env.BOOKING_AI_ENABLED = "1";
     process.env.OPENAI_API_KEY = inheritedKey;
     process.env.OPENAI_MODEL = "inherited-private-model-do-not-display";
+    process.env.VOICE_MODE = "realtime";
+    process.env.OPENAI_REALTIME_MODEL = "private-inherited-realtime-model";
+    process.env.OPENAI_REALTIME_VOICE = "private-inherited-realtime-voice";
+    process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL =
+      "private-inherited-transcriber";
+    process.env.REALTIME_BRIDGE_SECRET = "private-inherited-bridge-secret";
     const result = check();
     assert.equal(result.status, 0, result.output);
     assert.ok(result.output.includes("Booking language: rule-based"));
-    assertPrivate(result.output, [inheritedKey, process.env.OPENAI_MODEL]);
+    assert.ok(result.output.includes("Voice mode: Twilio Gather"));
+    assertPrivate(
+      result.output,
+      names
+        .filter((name) => name !== "BOOKING_AI_ENABLED")
+        .map((name) => process.env[name] || ""),
+    );
   } finally {
     for (const name of names) {
       if (saved[name] === undefined) delete process.env[name];
       else process.env[name] = saved[name];
     }
   }
+});
+
+test("Realtime requires a nonblank key independently of the optional text AI setting", () => {
+  for (const key of ["", "   "]) {
+    const result = check({
+      VOICE_MODE: "realtime",
+      BOOKING_AI_ENABLED: "0",
+      OPENAI_API_KEY: key,
+    });
+    assert.equal(result.status, 1);
+    assert.ok(result.output.includes("Missing OPENAI_API_KEY"));
+    assert.ok(result.output.includes("VOICE_MODE is realtime"));
+    assertPrivate(result.output);
+  }
+});
+
+test("Realtime preflight safely reports its model without importing its bridge or opening connections", () => {
+  const key = "test-only-realtime-key-do-not-display";
+  const bridgeSecret = "test-only-existing-bridge-secret-do-not-display";
+  for (const model of ["", "gpt-realtime-1.5"]) {
+    const result = check(
+      {
+        VOICE_MODE: "realtime",
+        OPENAI_API_KEY: key,
+        OPENAI_REALTIME_MODEL: model,
+        REALTIME_BRIDGE_SECRET: bridgeSecret,
+      },
+      ["--check", "--diagnose", "--sms"],
+    );
+    assert.equal(result.status, 0, result.output);
+    assert.ok(result.output.includes("does not connect"));
+    assert.ok(result.output.includes("Booking language: rule-based"));
+    assert.ok(
+      result.output.includes(
+        `Voice mode: OpenAI Realtime (model ${model || "gpt-realtime-1.5"})`,
+      ),
+    );
+    assertPrivate(result.output, [
+      key,
+      bridgeSecret,
+      fakeSettings.TWILIO_AUTH_TOKEN,
+      fakeSettings.NGROK_AUTHTOKEN,
+    ]);
+  }
+});
+
+test("Realtime voice and transcription defaults or supported overrides pass a local-only check", () => {
+  for (const voice of [
+    "",
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "sage",
+    "shimmer",
+    "verse",
+    "marin",
+    "cedar",
+  ]) {
+    const result = check({
+      VOICE_MODE: "realtime",
+      OPENAI_API_KEY: "test-only-realtime-key",
+      OPENAI_REALTIME_VOICE: voice,
+      OPENAI_REALTIME_TRANSCRIBE_MODEL: "gpt-transcribe",
+      OPENAI_MODEL: "gpt-4.1-mini",
+    });
+    assert.equal(result.status, 0, result.output);
+    assert.ok(
+      result.output.includes(
+        "Voice mode: OpenAI Realtime (model gpt-realtime-1.5)",
+      ),
+    );
+    assertPrivate(result.output);
+    assert.ok(!result.output.includes("test-only-realtime-key"));
+  }
+});
+
+test("voice mode and Realtime configuration reject invalid values without printing them", () => {
+  for (const mode of ["REALTIME", "true", "private-invalid-mode\nsecret"]) {
+    const result = check({ VOICE_MODE: mode });
+    assert.equal(result.status, 1);
+    assert.ok(result.output.includes("VOICE_MODE must be gather or realtime"));
+    assertPrivate(result.output);
+    assert.ok(!result.output.includes(mode));
+  }
+  for (const name of [
+    "OPENAI_REALTIME_MODEL",
+    "OPENAI_REALTIME_TRANSCRIBE_MODEL",
+  ] as const) {
+    for (const model of [
+      "model with spaces",
+      "https://private.example/model",
+      "model\nprivate-secret",
+      "x".repeat(121),
+    ]) {
+      const result = check({ [name]: model });
+      assert.equal(result.status, 1);
+      assert.ok(
+        result.output.includes(`${name} must be a valid model identifier`),
+      );
+      assertPrivate(result.output);
+      assert.ok(!result.output.includes(model));
+    }
+  }
+  const voice = "private-invalid-voice\nsecret";
+  const result = check({ OPENAI_REALTIME_VOICE: voice });
+  assert.equal(result.status, 1);
+  assert.ok(
+    result.output.includes(
+      "OPENAI_REALTIME_VOICE must be a supported built-in Realtime voice",
+    ),
+  );
+  assertPrivate(result.output);
+  assert.ok(!result.output.includes(voice));
 });
 
 test("GPT enabled without a nonblank API key fails by variable name without network effects", () => {

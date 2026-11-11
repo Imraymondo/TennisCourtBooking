@@ -103,6 +103,8 @@ function environment(port: number): NodeJS.ProcessEnv {
   return {
     ...result,
     BOOKING_AI_ENABLED: "0",
+    VOICE_MODE: "gather",
+    REALTIME_BRIDGE_SECRET: "",
     OPENAI_API_KEY: "",
     // Empty bindings prevent @next/env from reloading real provider settings
     // from a developer's .env.local during this isolated deployment check.
