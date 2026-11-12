@@ -29,7 +29,7 @@ const fields = {
   scope: "booking",
   action: "book",
   date: bookingDate,
-  court: 1,
+  court: 2,
   hour: "15",
   duration: 2,
   name: "张三",
@@ -582,7 +582,7 @@ test(
 
     provider.transcript(
       "item_booking",
-      "我要预约2099年12月1日下午三点一号球场两个小时，我叫张三",
+      "我要预约2099年12月1日下午三点二号球场两个小时，我叫张三",
     );
     await provider.prompts.wait(
       (prompt) => /联系电话/.test(prompt),
@@ -600,6 +600,11 @@ test(
     );
     assert.match(summary, /预约人张三/);
     assert.match(summary, /联系电话/);
+    assert.match(
+      summary,
+      /1号场/,
+      "the server assigns court one despite caller/model court two",
+    );
     assert.equal(
       (await schedule()).courts.flatMap((court) => court.bookings).length,
       0,
@@ -724,6 +729,20 @@ test(
   { timeout: 20_000 },
   async () => {
     const date = "2099-12-02";
+    const occupied = await fetch(`${appUrl}/api/bookings`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: publicOrigin },
+      body: JSON.stringify({
+        courtId: 1,
+        startLocal: `${date}T15:00`,
+        durationHours: 2,
+        customerName: "场地占用测试",
+        phone: "+61400111111",
+      }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    assert.equal(occupied.status, 201);
+    const occupiedBooking = (await occupied.json()).booking as Booking;
     const call = await ticketedCall();
     const providerCursor = providers.values.length;
     const twilio = await connect();
@@ -740,8 +759,12 @@ test(
       "raw-speech booking greeting",
     );
 
-    const bookings = async () =>
+    const allBookings = async () =>
       (await schedule(date)).courts.flatMap((court) => court.bookings);
+    const bookings = async () =>
+      (await allBookings()).filter(
+        (booking) => booking.id !== occupiedBooking.id,
+      );
     const answer = async (
       id: string,
       transcript: string,
@@ -750,11 +773,13 @@ test(
     ) => {
       const cursor = provider.prompts.values.length;
       provider.transcript(id, transcript);
-      return provider.prompts.wait(
+      const prompt = await provider.prompts.wait(
         (prompt) => expected.test(prompt),
         description,
         cursor,
       );
+      assert.doesNotMatch(prompt, /想订一号场|选择.*球场/);
+      return prompt;
     };
 
     assert.equal((await bookings()).length, 0);
@@ -768,14 +793,10 @@ test(
       // Repeating the same date in another format is a clarification, just as
       // saying "明天11月13号" on November 12 is one requested calendar day.
       "2099年12月2日，也就是2099-12-02",
-      /想订一号场还是二号场/,
-      "available courts after the raw date",
+      /几点开始/,
+      "start time question directly after the raw date",
     );
-    assert.match(available, /可开始时间/);
-    assert.match(available, /1号场/);
-    assert.match(available, /2号场/);
-    assert.equal((await bookings()).length, 0);
-    await answer("raw_court", "一号球场", /几点开始/, "start time question");
+    assert.doesNotMatch(available, /想订一号场|想查一号场/);
     assert.equal((await bookings()).length, 0);
     await answer("raw_hour", "下午三点", /几个小时/, "duration question");
     assert.equal((await bookings()).length, 0);
@@ -788,7 +809,7 @@ test(
     assert.equal((await bookings()).length, 0);
     await answer("raw_name", "我叫李四", /联系电话/, "contact question");
     assert.equal((await bookings()).length, 0);
-    assert.equal(provider.toolResponses, 6);
+    assert.equal(provider.toolResponses, 5);
     const review = await answer(
       "raw_contact",
       "使用来电号码",
@@ -797,6 +818,11 @@ test(
     );
     assert.match(review, /预约人李四/);
     assert.match(review, /两小时/);
+    assert.match(
+      review,
+      /2号场/,
+      "court one is occupied for the requested full interval",
+    );
     assert.equal((await bookings()).length, 0);
     await answer(
       "raw_confirm",
@@ -806,13 +832,20 @@ test(
     );
     assert.equal(
       provider.toolResponses,
-      6,
+      5,
       "contact and confirmation bypass the provider's missing function calls",
     );
     const committed = await bookings();
     assert.equal(committed.length, 1);
     assert.equal(committed[0].customerName, "李四");
-    assert.equal(committed[0].courtId, 1);
+    assert.equal(committed[0].courtId, 2);
+    const completeSchedule = await allBookings();
+    assert.equal(completeSchedule.length, 2);
+    assert.ok(
+      completeSchedule.some(
+        (booking) => booking.id === occupiedBooking.id && booking.courtId === 1,
+      ),
+    );
     assert.equal(committed[0].startsAt, "2099-12-02T04:00:00Z");
     assert.equal(
       Date.parse(committed[0].endsAt) - Date.parse(committed[0].startsAt),

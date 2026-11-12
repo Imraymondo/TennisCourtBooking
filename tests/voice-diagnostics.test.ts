@@ -178,7 +178,7 @@ test("diagnostics distinguish initial and DTMF callbacks from final Mandarin spe
   assert.equal(heard.input, "speech");
   assert.equal(heard.confidence, 0.91);
   assert.equal(heard.stepBefore, "date");
-  assert.equal(heard.stepAfter, "court");
+  assert.equal(heard.stepAfter, "hour");
   assert.equal(heard.dateRecognized, true);
   assert.equal(
     heard.recognizedIntent,

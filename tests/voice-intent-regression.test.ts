@@ -85,9 +85,11 @@ async function fillBookingToConfirmation() {
   assert.match(intent.xml, /哪一天/);
   assert.doesNotMatch(intent.xml, /您好，想预约球场还是查空档/);
   assert.equal(listBookings().length, 0);
-  const availability = await call.send("2099年12月1日");
-  assert.match(availability.xml, /可开始时间/);
-  await call.send("一号球场");
+  const startTime = await call.send("2099年12月1日");
+  assert.match(startTime.xml, /几点开始/);
+  assert.doesNotMatch(startTime.xml, /想订一号场还是二号场/);
+  assert.equal(call.state().date, "2099-12-01");
+  assert.equal(call.state().step, "hour");
   await call.send("下午三点");
   await call.send("默认");
   await call.send("我叫张三");
@@ -188,7 +190,7 @@ test("an unknown stale or malformed turn gives a spoken read-only recovery inste
     assert.equal(call.state().step, "date");
     assert.equal(listBookings().length, 0);
   }
-  assert.match((await call.send("2099年12月1日")).xml, /可开始时间/);
+  assert.match((await call.send("2099年12月1日")).xml, /几点开始/);
 });
 
 test("opt-in callback diagnostics show only routing metadata, never utterances or credentials", async () => {
@@ -230,7 +232,25 @@ test("a speech callback missing its turn recovers the current prompt without con
   assert.equal(listBookings().length, 0);
   // The requested date was not consumed by an ambiguous callback. The caller
   // can repeat it on the newly issued action URL and continue safely.
-  assert.match((await call.send("2099年12月1日")).xml, /可开始时间/);
+  assert.match((await call.send("2099年12月1日")).xml, /几点开始/);
+});
+
+test("a court-only utterance cannot be consumed as a start hour or duration", async () => {
+  const call = caller();
+  await call.send();
+  await call.send("我要预约");
+  await call.send("2099年12月1日");
+  const hourPrompt = await call.send("一号场");
+  assert.equal(call.state().step, "hour");
+  assert.equal(call.state().hour, undefined);
+  assert.equal(call.state().court, undefined);
+  assert.match(hourPrompt.xml, /几点开始|整点/);
+  await call.send("下午三点");
+  const durationPrompt = await call.send("二号球场");
+  assert.equal(call.state().step, "duration");
+  assert.equal(call.state().duration, undefined);
+  assert.match(durationPrompt.xml, /几个小时|时长/);
+  assert.equal(listBookings().length, 0);
 });
 
 test("missing-turn confirmation cannot mutate a pending booking; a correct new turn confirms exactly once", async () => {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Booking } from "@/lib/domain";
+import { COURTS } from "@/lib/domain";
 import {
   AppError,
   cancelBooking,
@@ -33,7 +34,6 @@ import {
   explicitConfirmation,
   isOffTopic,
   parseCalendarDate,
-  parseCourtSpeech,
   parseDurationSpeech,
   parseHourSpeech,
   parseIntent,
@@ -135,9 +135,7 @@ function prompt(state: VoiceState): string {
     case "date":
       return state.action === "query" ? "想查哪一天？" : "想订哪一天？";
     case "court":
-      return state.action === "query"
-        ? "想查一号场、二号场，还是两个都查？"
-        : "想订一号场还是二号场？";
+      return "想从几点开始？请说整点。";
     case "hour":
       return "想从几点开始？请说整点。";
     case "duration":
@@ -218,7 +216,19 @@ function currentVoiceState(callSid: string): VoiceState | null {
       ].includes(state.step)
     )
       return null;
-    return state;
+    // Calls already in progress may still contain the old court-selection step.
+    // Keep their turn valid while moving them to the next scheduling question.
+    return state.step === "court"
+      ? {
+          ...state,
+          court: undefined,
+          step: state.date
+            ? state.action === "query"
+              ? "duration"
+              : "hour"
+            : "date",
+        }
+      : state;
   } catch {
     return null;
   }
@@ -243,37 +253,12 @@ export function recoverVoiceTurn(callSid: string): string {
 function originalBooking(state: VoiceState): Booking {
   return getBooking(state.id!, state.code!);
 }
-function hasOpenSlot(state: VoiceState, court = state.court) {
-  const availability = getAvailability(state.date!, state.duration || 2);
-  return availability.slots.some(
-    (slot) =>
-      (!court || slot.courtId === court) &&
-      slot.available &&
-      (!state.hour || slot.startLocal.endsWith(`T${state.hour}:00`)),
-  );
-}
-function availabilityReply(
-  date: string,
-  court = 0,
-  duration = 2,
-  brief = false,
-): string {
+function availabilityReply(date: string, duration = 2): string {
   const availability = getAvailability(date, duration);
-  const courts = availability.courts.filter(
-    (item) => !court || item.id === court,
-  );
-  if (brief) {
-    const open = courts.filter((item) =>
-      availability.slots.some(
-        (slot) => slot.courtId === item.id && slot.available,
-      ),
-    );
-    return `${spokenDate(date)}可开始时间已查好，${open.map((item) => `${item.id}号场`).join("、")}有空档。`;
-  }
   const lines = [
     `${spokenDate(date)}可开始时间，悉尼时间，每场${spokenDuration(duration)}。`,
   ];
-  for (const item of courts) {
+  for (const item of availability.courts) {
     const hours = availability.slots
       .filter((slot) => slot.courtId === item.id && slot.available)
       .map((slot) => Number(slot.startLocal.slice(11, 13)));
@@ -290,48 +275,127 @@ function availabilityReply(
   }
   return lines.join("");
 }
-function afterDate(callSid: string, state: VoiceState, date: string) {
-  const next = { ...state, date };
-  const availability = getAvailability(date, state.duration || 2);
-  if (
-    date < todayLocal() ||
-    !availability.slots.some((slot) => slot.available)
-  ) {
-    return respond(
-      callSid,
-      { ...next, step: "date" },
-      "这一天没有可预订的未来时段，请换一个日期。 ",
-    );
-  }
-  const nextStep: Step = next.court
-    ? next.hour
-      ? "duration"
-      : "hour"
-    : "court";
-  return respond(
-    callSid,
-    { ...next, step: nextStep },
-    availabilityReply(date, 0, state.duration || 2, state.action === "book"),
-  );
-}
-
-function availableAISchedule(state: VoiceState): boolean {
-  if (state.action !== "change") return hasOpenSlot(state);
-  // A reschedule may overlap its own reservation. Read both local dates so a
-  // booking crossing midnight is checked against every other real reservation.
+function availableCourts(state: VoiceState): number[] {
   const times = bookingTimes(`${state.date}T${state.hour}:00`, state.duration);
-  originalBooking(state);
+  const excluding = state.action === "change" ? originalBooking(state).id : "";
+  // Check actual endpoints on both dates, including bookings beginning after
+  // midnight. A reschedule may overlap its own authenticated reservation.
   const bookings = [
     ...listBookings(state.date!),
     ...listBookings(instantToLocal(times.endsAt).slice(0, 10)),
   ];
-  return !bookings.some(
-    (booking) =>
-      booking.id !== state.id &&
-      booking.status === "confirmed" &&
-      booking.courtId === state.court &&
-      Date.parse(booking.startsAt) < Date.parse(times.endsAt) &&
-      Date.parse(booking.endsAt) > Date.parse(times.startsAt),
+  return COURTS.map((court) => court.id)
+    .sort((a, b) => a - b)
+    .filter(
+      (court) =>
+        !bookings.some(
+          (booking) =>
+            booking.id !== excluding &&
+            booking.status === "confirmed" &&
+            booking.courtId === court &&
+            Date.parse(booking.startsAt) < Date.parse(times.endsAt) &&
+            Date.parse(booking.endsAt) > Date.parse(times.startsAt),
+        ),
+    );
+}
+
+function advanceSchedule(
+  callSid: string,
+  state: VoiceState,
+  prefix = "",
+): string {
+  const next = { ...state, court: undefined };
+  if (!next.date) return respond(callSid, { ...next, step: "date" }, prefix);
+  try {
+    validateDate(next.date);
+  } catch (error) {
+    return respond(
+      callSid,
+      { ...next, date: undefined, step: "date" },
+      `${channelError(error)}。`,
+    );
+  }
+  if (next.date < todayLocal())
+    return respond(
+      callSid,
+      { ...next, date: undefined, step: "date" },
+      "只能预约未来的时间，请换个日期。",
+    );
+  if (next.action === "query") {
+    if (!next.duration)
+      return respond(callSid, { ...next, step: "duration" }, prefix);
+    return menu(callSid, availabilityReply(next.date, next.duration));
+  }
+  if (!next.hour) return respond(callSid, { ...next, step: "hour" }, prefix);
+  if (!next.duration)
+    return respond(callSid, { ...next, step: "duration" }, prefix);
+  const court = availableCourts(next)[0];
+  if (!court)
+    return respond(
+      callSid,
+      { ...next, hour: undefined, step: "hour" },
+      "这段时间已被预约，两个球场都没有完整空档，请换个开始时间。",
+    );
+  const assigned = { ...next, court };
+  return respond(
+    callSid,
+    {
+      ...assigned,
+      step: !next.name ? "name" : !next.contactPhone ? "contact" : "confirm",
+    },
+    prefix,
+  );
+}
+
+type SpokenSchedule = {
+  fields: { hour?: string; duration?: number };
+  invalid?: "hour" | "duration";
+};
+
+function scheduleSpeech(text: string): SpokenSchedule {
+  // A bare digit in an hour answer is an hour, never an inferred duration.
+  const hasDuration =
+    /小时|小時|钟头|鐘頭|分钟|分鐘|hours?|\bh\b|默认|默認|default/i.test(text);
+  const duration = hasDuration ? parseDurationSpeech(text) : null;
+  if (hasDuration && !duration) return { fields: {}, invalid: "duration" };
+  const hourText = duration
+    ? text.replace(
+        /[0-9零〇○一壹幺二贰貳两兩三叁參四肆五伍六陆陸七柒八捌九玖十拾百佰千仟]+(?:个|個)?(?:小时|小時|钟头|鐘頭|hours?|h)(?![a-z])/gi,
+        "",
+      )
+    : text;
+  const hour = parseHourSpeech(hourText);
+  const hasHour =
+    /[0-9零〇○一壹幺二贰貳两兩三叁參四肆五伍六陆陸七柒八捌九玖十拾百佰千仟]+(?:点|點|时|時)|\d{1,2}:\d{2}|凌晨|午夜|清晨|早晨|早上|上午|中午|下午|傍晚|晚上|晚间|晚間|\b(?:am|pm)\b/i.test(
+      hourText,
+    );
+  if (hasHour && !hour) return { fields: {}, invalid: "hour" };
+  return {
+    fields: {
+      ...(hour ? { hour } : {}),
+      ...(duration ? { duration } : {}),
+    },
+  };
+}
+
+function clarifySchedule(
+  callSid: string,
+  state: VoiceState,
+  invalid: "hour" | "duration",
+) {
+  // A rejected correction must not fall back to the old time or duration.
+  return respond(
+    callSid,
+    {
+      ...state,
+      hour: undefined,
+      court: undefined,
+      ...(invalid === "duration" ? { duration: undefined } : {}),
+      step: state.date ? "hour" : "date",
+    },
+    invalid === "duration"
+      ? "时长为一至八个整小时，请再说开始时间和时长。"
+      : "只支持一个整点开始时间，请重新说明。",
   );
 }
 
@@ -367,16 +431,19 @@ function applyVoiceInterpretation(
   if (!["query", "book", "change"].includes(next.action || "")) return null;
   const supplied = [
     interpretation.date,
-    interpretation.court,
     interpretation.hour,
     interpretation.duration,
     interpretation.name,
   ].some((value) => value !== null && value !== undefined);
-  if (!supplied && !interpretation.correction && state.step !== "menu")
+  if (
+    !supplied &&
+    (!interpretation.correction || interpretation.correction === "court") &&
+    state.step !== "menu"
+  )
     return null;
 
   const correction = interpretation.correction;
-  if (correction) {
+  if (correction && correction !== "court") {
     const field = correction === "contact" ? "contactPhone" : correction;
     delete next[field];
     if (correction === "contact") delete next.contactUsesCallerNumber;
@@ -386,15 +453,8 @@ function applyVoiceInterpretation(
   try {
     if (interpretation.date !== null && interpretation.date !== undefined)
       next.date = validateDate(interpretation.date);
-    if (interpretation.court !== null && interpretation.court !== undefined) {
-      if (
-        !(next.action === "query" ? [0, 1, 2] : [1, 2]).includes(
-          interpretation.court,
-        )
-      )
-        throw new AppError("请选择一号或二号球场");
-      next.court = interpretation.court;
-    }
+    // The server assigns a court after checking the entire requested interval.
+    // A caller/model court field never controls allocation or adds a question.
     if (interpretation.hour !== null && interpretation.hour !== undefined) {
       if (!/^([01]\d|2[0-3])$/.test(interpretation.hour))
         throw new AppError("只支持整点开始，请提供00至23的小时");
@@ -417,51 +477,7 @@ function applyVoiceInterpretation(
       `${channelError(error)}。请重新回答当前问题。 `,
     );
   }
-  if (!next.date) return respond(callSid, { ...next, step: "date" });
-  const availability = getAvailability(next.date, next.duration || 2);
-  if (
-    next.date < todayLocal() ||
-    !availability.slots.some((slot) => slot.available)
-  )
-    return respond(
-      callSid,
-      { ...next, date: undefined, step: "date" },
-      "这一天没有可预订的未来时段，请换一个日期。 ",
-    );
-  if (next.court === undefined)
-    return respond(
-      callSid,
-      { ...next, step: "court" },
-      availabilityReply(
-        next.date,
-        0,
-        next.duration || 2,
-        next.action === "book",
-      ),
-    );
-  if (next.action === "query") {
-    if (!next.duration) return respond(callSid, { ...next, step: "duration" });
-    return menu(
-      callSid,
-      availabilityReply(next.date, next.court, next.duration),
-    );
-  }
-  if (!next.hour) return respond(callSid, { ...next, step: "hour" });
-  bookingTimes(`${next.date}T${next.hour}:00`, next.duration || 2);
-  if (!availableAISchedule(next))
-    return respond(
-      callSid,
-      { ...next, hour: undefined, step: "hour" },
-      `所选场地、开始时间或时长暂无空档。${availabilityReply(next.date, next.court, next.duration || 2)}`,
-    );
-  if (!next.duration) return respond(callSid, { ...next, step: "duration" });
-  if (!next.name) return respond(callSid, { ...next, step: "name" });
-  if (!next.contactPhone) return respond(callSid, { ...next, step: "contact" });
-  return respond(
-    callSid,
-    { ...next, step: "confirm" },
-    "已更新待确认的信息，尚未提交。 ",
-  );
+  return advanceSchedule(callSid, next);
 }
 function spokenNumber(value: string) {
   const normalized = value.replace(
@@ -563,10 +579,18 @@ export function handleVoice(
         if (action === "query" || action === "book") {
           const date = parseCalendarDate(text);
           if (date) {
-            next.hour = parseHourSpeech(text) || undefined;
-            const court = parseCourtSpeech(text);
-            next.court = court === 1 || court === 2 ? court : undefined;
-            return afterDate(callSid, next, date);
+            const supplied = scheduleSpeech(text);
+            if (supplied.invalid)
+              return clarifySchedule(
+                callSid,
+                { ...next, date },
+                supplied.invalid,
+              );
+            return advanceSchedule(callSid, {
+              ...next,
+              ...supplied.fields,
+              date,
+            });
           }
         }
         return respond(callSid, next);
@@ -581,54 +605,36 @@ export function handleVoice(
             state,
             "请说出一个有效日期，或输入八位日期。 ",
           );
-        return afterDate(callSid, state, date);
+        const supplied = scheduleSpeech(text);
+        if (supplied.invalid)
+          return clarifySchedule(callSid, { ...state, date }, supplied.invalid);
+        return advanceSchedule(callSid, {
+          ...state,
+          ...supplied.fields,
+          date,
+        });
       }
       case "court": {
-        const court = /^\d$/.test(digits)
-          ? Number(digits)
-          : parseCourtSpeech(text);
-        if (
-          court === null ||
-          !(state.action === "query" ? [0, 1, 2] : [1, 2]).includes(court)
-        )
-          return respond(callSid, state, "请选择一号或二号球场。 ");
-        const next = { ...state, court };
-        if (state.action === "book" && !hasOpenSlot(next)) {
-          return respond(
-            callSid,
-            { ...next, court: undefined, hour: undefined },
-            `您选择的场地或时间暂无空档。${availabilityReply(state.date!, 0, state.duration || 2)}`,
-          );
-        }
-        return respond(callSid, {
-          ...next,
-          step:
-            state.action === "query"
-              ? "duration"
-              : state.hour
-                ? "duration"
-                : "hour",
+        return advanceSchedule(callSid, {
+          ...state,
+          court: undefined,
+          hour: undefined,
         });
       }
       case "hour": {
+        const supplied = scheduleSpeech(text);
+        if (supplied.invalid)
+          return clarifySchedule(callSid, state, supplied.invalid);
         const hour = /^([01]\d|2[0-3])$/.test(digits)
           ? digits
-          : parseHourSpeech(text);
+          : supplied.fields.hour;
         if (!hour)
           return respond(
             callSid,
             state,
             "只支持整点开始，请说例如下午三点，或输入00至23。 ",
           );
-        const next = { ...state, hour };
-        if (state.action === "book" && !hasOpenSlot(next)) {
-          return respond(
-            callSid,
-            state,
-            `这个开始时间不可预订。${availabilityReply(state.date!, state.court!, state.duration || 2)}`,
-          );
-        }
-        return respond(callSid, { ...next, step: "duration" });
+        return advanceSchedule(callSid, { ...state, ...supplied.fields, hour });
       }
       case "duration": {
         const duration = digits
@@ -643,32 +649,7 @@ export function handleVoice(
           duration > 8
         )
           return respond(callSid, state, "时长为一至八个整小时，默认两小时。 ");
-        const next = { ...state, duration };
-        if (state.action === "query")
-          return menu(
-            callSid,
-            availabilityReply(state.date!, state.court!, duration),
-          );
-        if (state.action === "book" && !hasOpenSlot(next)) {
-          return respond(
-            callSid,
-            { ...next, step: "hour", hour: undefined },
-            `所选时长无法完整预订。${availabilityReply(state.date!, state.court!, duration)}`,
-          );
-        }
-        return respond(callSid, {
-          ...next,
-          step:
-            state.action === "book"
-              ? state.name
-                ? state.contactPhone
-                  ? "confirm"
-                  : "contact"
-                : "name"
-              : state.contactPhone
-                ? "confirm"
-                : "contact",
-        });
+        return advanceSchedule(callSid, { ...state, duration });
       }
       case "name": {
         const name = parseNameSpeech(text);
@@ -678,10 +659,9 @@ export function handleVoice(
             state,
             "请只告诉我预约人的姓名，例如我叫张三。 ",
           );
-        return respond(callSid, {
+        return advanceSchedule(callSid, {
           ...state,
           name,
-          step: state.contactPhone ? "confirm" : "contact",
         });
       }
       case "contact": {
@@ -696,11 +676,10 @@ export function handleVoice(
             state,
             "联系电话未听清。您可以说使用来电号码，或用按键输入联系电话后按井号。 ",
           );
-        return respond(callSid, {
+        return advanceSchedule(callSid, {
           ...state,
           contactPhone,
           contactUsesCallerNumber,
-          step: "confirm",
         });
       }
       case "id": {
@@ -733,8 +712,8 @@ export function handleVoice(
       case "confirm": {
         const corrections: [RegExp, Step][] = [
           [/修改日期|更改日期/, "date"],
-          [/修改场地|更换场地|更改球场/, "court"],
           [/修改时间|更改时间/, "hour"],
+          [/修改时长|更改时长|修改時長|更改時長/, "duration"],
           [/修改姓名|更改姓名/, "name"],
           [/修改电话|更改电话|修改联系/, "contact"],
         ];
@@ -742,7 +721,20 @@ export function handleVoice(
           state.action !== "cancel" &&
           corrections.find(([pattern]) => pattern.test(text));
         if (correction)
-          return respond(callSid, { ...state, step: correction[1] });
+          return respond(callSid, {
+            ...state,
+            court: undefined,
+            step: correction[1],
+          });
+        if (
+          state.action !== "cancel" &&
+          /修改场地|更换场地|更改球场|修改場地|更換場地|更改球場/.test(text)
+        )
+          return advanceSchedule(
+            callSid,
+            state,
+            "球场会按空档自动安排，请核对。 ",
+          );
         const confirmation =
           digits === "1"
             ? "confirm"
@@ -761,6 +753,18 @@ export function handleVoice(
           return menu(
             callSid,
             `已取消。${spokenBookingSummary(cancelBooking(state.id!, state.version!, state.code!))}`,
+          );
+        // A review is tied to its displayed court. If it was taken while the
+        // caller considered the summary, assign again and require a new turn's
+        // explicit confirmation before writing anything.
+        if (!state.date || !state.hour || !state.duration)
+          return advanceSchedule(callSid, state);
+        const open = availableCourts(state);
+        if (!state.court || !open.includes(state.court))
+          return advanceSchedule(
+            callSid,
+            state,
+            "刚才的场地已被预约，已重新安排，请再次核对。 ",
           );
         if (state.action === "change") {
           const existing = originalBooking(state);
@@ -806,13 +810,16 @@ export function handleVoice(
     if (
       error instanceof AppError &&
       error.status === 409 &&
-      state.action === "book" &&
-      state.date
+      ["book", "change"].includes(state.action || "") &&
+      /时间段已被预约/.test(error.message) &&
+      state.date &&
+      state.hour &&
+      state.duration
     ) {
-      return respond(
+      return advanceSchedule(
         callSid,
-        { ...state, step: "hour", hour: undefined },
-        `${channelError(error)}。${availabilityReply(state.date, state.court || 0, state.duration || 2)}`,
+        state,
+        "刚才的场地已被预约，已重新安排，请再次核对。 ",
       );
     }
     return menu(callSid, channelError(error));

@@ -535,6 +535,10 @@ test("GA Realtime uses PCMU, trusted Mandarin transcription and manual responses
     field(session, "session", "audio", "input", "turn_detection", "type"),
     "server_vad",
   );
+  const bookingInstructions = String(field(session, "session", "instructions"));
+  assert.match(bookingInstructions, /不要询问客户选择几号球场/);
+  assert.match(bookingInstructions, /先检查1号场、再检查2号场/);
+  assert.match(bookingInstructions, /不得拆分时段换场/);
   assert.equal(
     field(
       session,

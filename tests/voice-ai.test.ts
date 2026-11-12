@@ -81,6 +81,11 @@ function pendingBooking() {
   );
   assert.match(contact, /联系电话/);
   assert.equal(call.state().step, "contact");
+  assert.equal(
+    call.state().court,
+    1,
+    "server assignment ignores the requested court when both are free",
+  );
   const summary = call.send("使用来电号码");
   assert.match(summary, /预约人张三/);
   assert.match(summary, /三小时/);
@@ -97,7 +102,7 @@ test("voice understanding fills several fields while a later raw confirmation ow
   assert.match(committed, /预约成功/);
   assert.equal(listBookings().length, 1);
   const booking = listBookings()[0];
-  assert.equal(booking.courtId, 2);
+  assert.equal(booking.courtId, 1);
   assert.equal(booking.durationHours, 3);
   assert.equal(booking.customerName, "张三");
   assert.equal(booking.phone, "+61400123456");
@@ -114,6 +119,33 @@ test("raw denial overrides model fields and never submits a reviewed booking", (
   call.send("不确认", understanding({ hour: "18", correction: "hour" }));
   assert.equal(listBookings().length, 0);
   assert.equal(call.state().step, "menu");
+});
+
+test("a model court correction keeps the server assignment and still requires raw confirmation", () => {
+  const call = pendingBooking();
+  call.send("换成二号场", understanding({ court: 2, correction: "court" }));
+  assert.equal(call.state().court, 1);
+  assert.equal(call.state().step, "confirm");
+  assert.equal(listBookings().length, 0);
+  call.send("确认预约");
+  assert.equal(listBookings()[0].courtId, 1);
+});
+
+test("a model court preference cannot narrow a phone availability query", () => {
+  const call = caller();
+  const availability = call.send(
+    "查十二月一号二号场三小时空档",
+    understanding({
+      action: "query",
+      date: "2099-12-01",
+      court: 2,
+      duration: 3,
+    }),
+  );
+  assert.match(availability, /1号场/);
+  assert.match(availability, /2号场/);
+  assert.equal(call.state().step, "menu");
+  assert.equal(listBookings().length, 0);
 });
 
 test("a model schedule correction is reviewed and needs a new explicit confirmation", () => {
@@ -168,7 +200,7 @@ test("voice AI context contains scheduling fields only and skips credentials, co
   assert.ok(context);
   assert.equal(context.channel, "phone");
   assert.equal(context.hour, "15");
-  assert.equal(context.court, 2);
+  assert.equal(context.court, 1);
   for (const privateField of [
     "name",
     "contactPhone",
@@ -252,29 +284,68 @@ test("invalid model schedule fields cannot bypass the store's booking rules", ()
   assert.doesNotMatch(response, /确认无误/);
 });
 
-test("model slot choices are checked against current stored bookings", () => {
+test("server assignment uses court two when court one cannot fit the full modeled interval", () => {
   createBooking({
-    courtId: 2,
-    startLocal: "2099-12-01T15:00",
-    durationHours: 3,
+    courtId: 1,
+    startLocal: "2099-12-01T17:00",
+    durationHours: 1,
     customerName: "已有预约人",
     phone: "+61400999999",
     source: "web",
   });
   const call = caller();
-  call.send(
-    "安排二号球场",
+  const contact = call.send(
+    "安排一号球场下午三点开始打三个小时，我叫张三",
     understanding({
       action: "book",
       date: "2099-12-01",
-      court: 2,
+      court: 1,
       hour: "15",
       duration: 3,
       name: "张三",
     }),
   );
   assert.equal(listBookings().length, 1);
-  assert.notEqual(call.state().step, "confirm");
+  assert.equal(call.state().court, 2);
+  assert.equal(call.state().step, "contact");
+  assert.match(contact, /联系电话/);
+  const review = call.send("使用来电号码");
+  assert.match(review, /2号场/);
+  assert.equal(call.state().step, "confirm");
+  assert.equal(listBookings().length, 1);
+  call.send("确认预约");
+  const created = listBookings().find((booking) => booking.source === "phone")!;
+  assert.equal(created.courtId, 2);
+  assert.equal(created.startsAt, "2099-12-01T04:00:00Z");
+  assert.equal(created.durationHours, 3);
+});
+
+test("when neither court fits the modeled interval the caller must choose a new start time", () => {
+  for (const courtId of [1, 2]) {
+    createBooking({
+      courtId,
+      startLocal: "2099-12-01T17:00",
+      durationHours: 1,
+      customerName: "已有预约人",
+      phone: "+61400999999",
+      source: "web",
+    });
+  }
+  const call = caller();
+  const unavailable = call.send(
+    "下午三点打三个小时",
+    understanding({
+      action: "book",
+      date: "2099-12-01",
+      court: 2,
+      hour: "15",
+      duration: 3,
+    }),
+  );
+  assert.equal(call.state().step, "hour");
+  assert.equal(call.state().hour, undefined);
+  assert.match(unavailable, /暂无空档|没有.*空档|无法完整预订|不可预订/);
+  assert.equal(listBookings().length, 2);
 });
 
 const WEBHOOK = "https://courts.example/api/webhooks/voice";

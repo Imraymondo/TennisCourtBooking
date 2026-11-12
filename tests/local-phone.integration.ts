@@ -323,8 +323,9 @@ test("signed speech crosses the real relay and production app, requires confirma
   const requested = await speak("我要预定网球场");
   assert.match(requested.text, /哪一天/);
   assert.doesNotMatch(requested.text, /您好，想预约球场还是查空档/);
-  assert.match((await speak("2099年12月1日")).text, /想订一号场还是二号场/);
-  assert.match((await speak("一号球场")).text, /几点开始/);
+  const timeQuestion = await speak("2099年12月1日");
+  assert.match(timeQuestion.text, /几点开始/);
+  assert.doesNotMatch(timeQuestion.text, /想订一号场|选择.*球场/);
   assert.match((await speak("下午三点")).text, /几个小时/);
   const nameQuestion = await speak("默认");
   assert.match(nameQuestion.text, /预约人叫什么名字/);
@@ -332,6 +333,7 @@ test("signed speech crosses the real relay and production app, requires confirma
   assert.match((await speak("我叫张三")).text, /联系电话/);
   const confirm = await speak("使用来电号码");
   assert.match(confirm.text, /确认请说确认预约/);
+  assert.match(confirm.text, /1号场/);
   assert.doesNotMatch(confirm.text, /姓名会公开显示/);
   assert.equal(
     (await publicSchedule()).courts.flatMap((court) => court.bookings).length,

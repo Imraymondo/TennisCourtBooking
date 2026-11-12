@@ -132,17 +132,16 @@ test("pressing 2 then saying 我要预约明天 supplies a spoken date despite t
   const datePrompt = await call.send("", "2");
   assert.match(datePrompt.xml, /哪一天/);
   assert.equal(datePrompt.attrs.numDigits, "8");
-  const availability = await call.send("我要预约明天");
+  const hourPrompt = await call.send("我要预约明天");
   const tomorrow = Temporal.Now.zonedDateTimeISO(TIME_ZONE)
     .toPlainDate()
     .add({ days: 1 })
     .toString();
   assert.equal(call.state().date, tomorrow);
-  assert.equal(call.state().step, "court");
+  assert.equal(call.state().step, "hour");
   assert.equal(call.state().duration || 2, 2);
-  assert.match(availability.xml, /可开始时间/);
-  assert.match(availability.xml, /1号场/);
-  assert.match(availability.xml, /2号场/);
+  assert.match(hourPrompt.xml, /几点开始/);
+  assert.doesNotMatch(hourPrompt.xml, /选择.*球场|哪.*球场/);
   assert.equal(listBookings().length, 0);
 });
 
@@ -151,7 +150,6 @@ test("every pending booking prompt keeps speech capture enabled while only final
   await call.send();
   assert.match((await call.send("我要预定球场")).xml, /哪一天/);
   await call.send("2099年12月1日");
-  await call.send("一号球场");
   await call.send("下午三点");
   await call.send("默认");
   const contact = await call.send("我叫李四");

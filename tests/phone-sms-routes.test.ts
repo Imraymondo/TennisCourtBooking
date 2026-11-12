@@ -184,11 +184,12 @@ async function pendingGather(calls: CapturedSms[]) {
     "",
     "我要预约",
     "2099年12月1日",
-    "一号球场",
     "下午三点",
     "两个小时",
   ]) {
-    await call.say(speech);
+    const reply = await call.say(speech);
+    assert.notEqual(call.state().step, "court");
+    assert.doesNotMatch(reply, /请选择一号或二号|想订一号场还是二号场/);
     assertUncommitted(calls);
   }
   assert.equal(call.state().step, "name");
@@ -376,9 +377,9 @@ test("the private Realtime route finalizes SMS after confirmation and returns a 
   const { booking, outbox, body } = assertReceipt(callSid, calls[0], CALLER);
   assert.equal(booking.phone, CALLER);
   assert.equal(booking.customerName, "李四");
-  assert.equal(booking.courtId, 2);
+  assert.equal(booking.courtId, 1);
   assert.equal(booking.durationHours, 3);
-  assert.match(body, /二号球场/);
+  assert.match(body, /一号球场/);
   assert.match(body, /2099-12-01 15:00至2099-12-01 18:00/);
   assert.equal(outbox.status, "submitted");
   assert.equal(result.context.step, "menu");
