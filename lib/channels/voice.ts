@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { Booking } from "@/lib/domain";
-import { TIME_ZONE } from "@/lib/domain";
 import {
   AppError,
   cancelBooking,
@@ -20,9 +19,16 @@ import {
   validateDuration,
 } from "@/lib/time";
 import type { BookingAIContext, BookingInterpretation } from "./booking-ai";
-import { availabilityReply, bookingSummary } from "./commands";
+import { phoneSmsPendingPrompt, queuePhoneBookingSms } from "./phone-sms";
 import { baseUrl, channelError, escapeXml } from "./security";
 import { VOICE_CAPTURE } from "./voice-capture";
+import {
+  spokenAccessCode,
+  spokenBookingSummary,
+  spokenDate,
+  spokenDuration,
+  spokenHourRange,
+} from "./voice-speech";
 import {
   explicitConfirmation,
   isOffTopic,
@@ -59,6 +65,8 @@ type VoiceState = {
   duration?: number;
   name?: string;
   contactPhone?: string;
+  contactUsesCallerNumber?: boolean;
+  namePrivacyNoticeGiven?: boolean;
   id?: string;
   code?: string;
   version?: number;
@@ -110,52 +118,44 @@ export function voiceAIContext(
 function say(text: string) {
   return `<Say language="cmn-CN" voice="Polly.Zhiyu">${escapeXml(text)}</Say>`;
 }
-function spokenDigits(value: string) {
-  return value.split("").join("，");
-}
 function stateSummary(state: VoiceState) {
   const times = bookingTimes(
     `${state.date}T${state.hour}:00`,
     state.duration,
     false,
   );
-  const format = new Intl.DateTimeFormat("zh-CN", {
-    timeZone: TIME_ZONE,
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  });
-  return `${state.court}号球场，悉尼时间${format.format(new Date(times.startsAt))}开始，${format.format(new Date(times.endsAt))}结束，共${state.duration}小时。`;
+  return spokenBookingSummary({ ...times, courtId: state.court! });
 }
 function prompt(state: VoiceState): string {
   switch (state.step) {
     case "menu":
-      return `${state.introduced ? "" : "欢迎使用网球场预约助手。我只处理球场预约。所有时间均为悉尼时间。"}请告诉我您想预定球场、查询空闲时间、修改还是取消预约。也可以按1查询，按2预订，按3修改，按4取消，按5查看。`;
+      return state.introduced
+        ? "还需要预约球场或查空档吗？"
+        : "您好，想预约球场还是查空档？";
     case "date":
-      return "您希望哪一天使用球场？可以说具体日期、明天或后天，也可以输入八位日期。";
+      return state.action === "query" ? "想查哪一天？" : "想订哪一天？";
     case "court":
       return state.action === "query"
-        ? "您想查询一号球场、二号球场，还是两个球场？也可以按0查询全部。"
-        : "请从刚才公布的可用场地中选择一号球场或二号球场。";
+        ? "想查一号场、二号场，还是两个都查？"
+        : "想订一号场还是二号场？";
     case "hour":
-      return `您希望几点开始？请说整点，例如下午三点或晚上十一点，也可以输入00至23的两位小时。每次默认${state.duration || 2}小时，可以跨午夜。`;
+      return "想从几点开始？请说整点。";
     case "duration":
-      return "您想预订几个小时？默认两小时，可以说默认或两个小时，也可输入1至8，直接按井号使用默认两小时。";
+      return state.action === "query"
+        ? "想查几个小时的空档？默认两小时。"
+        : "订几个小时？默认两小时。";
     case "name":
-      return "请告诉我预约人的姓名，例如我叫张三。姓名将公开展示在网站日程中，联系电话不会公开。";
+      return "预约人叫什么名字？姓名会公开显示在网站日程上。";
     case "contact":
-      return "请提供联系电话。若使用当前来电号码，请说使用来电号码，或按1；也可以直接说出或输入其他联系电话，输入完按井号。";
+      return "联系电话是多少？用来电号码请说使用来电号码或按1。";
     case "id":
-      return "请说出或输入八位预约编号。";
+      return "请说八位预约编号，也可以按键输入。";
     case "code":
-      return "请说出或输入十位预约管理码。管理码用于验证您有权管理这次预约。";
+      return "请说十位管理码，也可以按键输入。";
     case "confirm":
       return state.action === "cancel"
-        ? `即将取消预约${spokenDigits(state.id!)}。确认取消请说确认取消或按1，返回请说不确认或按2。`
-        : `${state.action === "change" ? "即将修改预约。" : "请核对，姓名将公开展示。"}预约人${state.name}，联系电话${spokenDigits(state.contactPhone || "")}。${stateSummary(state)}确认无误请说确认预约或按1。需要调整可说修改日期、修改场地、修改时间、修改姓名或修改电话；不确认请说不确认或按2。`;
+        ? `要取消${spokenBookingSummary(originalBooking(state))}请说确认取消或按1。保留请说不确认或按2。`
+        : `${state.action === "change" ? "修改为：" : "请核对："}${state.namePrivacyNoticeGiven ? "" : "姓名会公开显示在网站日程上。"}预约人${state.name}，联系电话${state.contactUsesCallerNumber ? "使用来电号码" : spokenAccessCode(state.contactPhone || "")}。${stateSummary(state)}确认请说确认预约或按1；需要调整请直接说，不确认请说不确认或按2。`;
   }
 }
 function renderGather(state: VoiceState, prefix = "", promptState = state) {
@@ -176,7 +176,15 @@ function renderGather(state: VoiceState, prefix = "", promptState = state) {
   return `<Gather ${input} action="${escapeXml(action)}" method="POST" actionOnEmptyResult="true">${prefix ? say(prefix) : ""}${say(prompt(promptState))}</Gather>`;
 }
 function respond(callSid: string, state: VoiceState, prefix = "") {
-  const next = { ...state, turn: randomUUID(), introduced: true };
+  const next = {
+    ...state,
+    turn: randomUUID(),
+    introduced: true,
+    namePrivacyNoticeGiven:
+      state.namePrivacyNoticeGiven ||
+      state.step === "name" ||
+      (state.step === "confirm" && state.action !== "cancel"),
+  };
   setChannelState(`voice:${callSid}`, JSON.stringify(next));
   return renderGather(next, prefix, state);
 }
@@ -244,6 +252,44 @@ function hasOpenSlot(state: VoiceState, court = state.court) {
       (!state.hour || slot.startLocal.endsWith(`T${state.hour}:00`)),
   );
 }
+function availabilityReply(
+  date: string,
+  court = 0,
+  duration = 2,
+  brief = false,
+): string {
+  const availability = getAvailability(date, duration);
+  const courts = availability.courts.filter(
+    (item) => !court || item.id === court,
+  );
+  if (brief) {
+    const open = courts.filter((item) =>
+      availability.slots.some(
+        (slot) => slot.courtId === item.id && slot.available,
+      ),
+    );
+    return `${spokenDate(date)}可开始时间已查好，${open.map((item) => `${item.id}号场`).join("、")}有空档。`;
+  }
+  const lines = [
+    `${spokenDate(date)}可开始时间，悉尼时间，每场${spokenDuration(duration)}。`,
+  ];
+  for (const item of courts) {
+    const hours = availability.slots
+      .filter((slot) => slot.courtId === item.id && slot.available)
+      .map((slot) => Number(slot.startLocal.slice(11, 13)));
+    const groups: number[][] = [];
+    for (const hour of hours) {
+      const last = groups.at(-1);
+      if (last && last.at(-1) === hour - 1) last.push(hour);
+      else groups.push([hour]);
+    }
+    const starts = groups
+      .map((group) => spokenHourRange(group[0], group.at(-1)!))
+      .join("、");
+    lines.push(`${item.id}号场：${starts || "暂无可用时段"}。`);
+  }
+  return lines.join("");
+}
 function afterDate(callSid: string, state: VoiceState, date: string) {
   const next = { ...state, date };
   const availability = getAvailability(date, state.duration || 2);
@@ -265,7 +311,7 @@ function afterDate(callSid: string, state: VoiceState, date: string) {
   return respond(
     callSid,
     { ...next, step: nextStep },
-    availabilityReply(date, 0, state.duration || 2),
+    availabilityReply(date, 0, state.duration || 2, state.action === "book"),
   );
 }
 
@@ -333,6 +379,7 @@ function applyVoiceInterpretation(
   if (correction) {
     const field = correction === "contact" ? "contactPhone" : correction;
     delete next[field];
+    if (correction === "contact") delete next.contactUsesCallerNumber;
   }
   // Validate again at the application boundary, even when the shared client has
   // already checked its JSON schema.
@@ -385,7 +432,12 @@ function applyVoiceInterpretation(
     return respond(
       callSid,
       { ...next, step: "court" },
-      availabilityReply(next.date, 0, next.duration || 2),
+      availabilityReply(
+        next.date,
+        0,
+        next.duration || 2,
+        next.action === "book",
+      ),
     );
   if (next.action === "query") {
     if (!next.duration) return respond(callSid, { ...next, step: "duration" });
@@ -633,17 +685,23 @@ export function handleVoice(
         });
       }
       case "contact": {
-        const contactPhone =
-          digits === "1" || usesCallerNumber(text)
-            ? phone
-            : parsePhoneSpeech(digits || text);
+        const contactUsesCallerNumber =
+          digits === "1" || usesCallerNumber(text);
+        const contactPhone = contactUsesCallerNumber
+          ? phone
+          : parsePhoneSpeech(digits || text);
         if (!contactPhone)
           return respond(
             callSid,
             state,
             "联系电话未听清。您可以说使用来电号码，或用按键输入联系电话后按井号。 ",
           );
-        return respond(callSid, { ...state, contactPhone, step: "confirm" });
+        return respond(callSid, {
+          ...state,
+          contactPhone,
+          contactUsesCallerNumber,
+          step: "confirm",
+        });
       }
       case "id": {
         const id = digits || spokenNumber(text);
@@ -658,7 +716,10 @@ export function handleVoice(
         const next = { ...state, code };
         const booking = originalBooking(next);
         if (state.action === "view")
-          return menu(callSid, bookingSummary(booking));
+          return menu(
+            callSid,
+            `${booking.status === "cancelled" ? "预约已取消。" : "预约已确认。"}${spokenBookingSummary(booking)}`,
+          );
         if (booking.status === "cancelled")
           return menu(callSid, "此预约已取消。 ");
         return respond(callSid, {
@@ -699,9 +760,7 @@ export function handleVoice(
         if (state.action === "cancel")
           return menu(
             callSid,
-            bookingSummary(
-              cancelBooking(state.id!, state.version!, state.code!),
-            ),
+            `已取消。${spokenBookingSummary(cancelBooking(state.id!, state.version!, state.code!))}`,
           );
         if (state.action === "change") {
           const existing = originalBooking(state);
@@ -719,7 +778,7 @@ export function handleVoice(
             },
             state.code,
           );
-          return menu(callSid, bookingSummary(changed));
+          return menu(callSid, `已修改。${spokenBookingSummary(changed)}`);
         }
         if (!state.name || !state.contactPhone)
           return respond(
@@ -735,11 +794,11 @@ export function handleVoice(
           phone: state.contactPhone,
           source: "phone",
         });
-        const reference = spokenDigits(result.booking.id),
-          code = spokenDigits(result.accessCode);
+        if (queuePhoneBookingSms(callSid, result))
+          return menu(callSid, phoneSmsPendingPrompt(result.booking.id));
         return menu(
           callSid,
-          `${bookingSummary(result.booking)}网站日程已更新。请记下预约编号：${reference}。管理码：${code}。再次播报，预约编号：${reference}。管理码：${code}。请妥善保管。`,
+          `预约成功。${spokenBookingSummary(result.booking)}短信暂不可用，请记下预约编号：${spokenAccessCode(result.booking.id)}。管理码：${spokenAccessCode(result.accessCode)}。`,
         );
       }
     }

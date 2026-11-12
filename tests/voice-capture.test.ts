@@ -10,6 +10,7 @@ const WEBHOOK = "https://courts.example/api/webhooks/voice";
 
 beforeEach(() => {
   process.env.VOICE_MODE = "gather";
+  process.env.TWILIO_ACCOUNT_SID = "";
   process.env.BOOKING_AI_ENABLED = "0";
   closeDatabase();
   process.env.BOOKING_DB_PATH = ":memory:";
@@ -115,7 +116,12 @@ function caller() {
 test("emitted TwiML uses documented Gather Mandarin language, mixed capture, and a finite speech pause timeout", async () => {
   const call = caller();
   const initial = await call.send();
-  assert.match(initial.xml, /欢迎使用/);
+  assert.equal(
+    [...initial.xml.matchAll(/<Say\b[^>]*>([^<]*)<\/Say>/g)]
+      .map((match) => match[1])
+      .join(""),
+    "您好，想预约球场还是查空档？",
+  );
   assert.equal(initial.attrs.numDigits, "1");
   assert.equal(listBookings().length, 0);
 });

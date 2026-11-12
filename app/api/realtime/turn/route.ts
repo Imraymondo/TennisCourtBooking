@@ -6,6 +6,7 @@ import {
   realtimeVoiceEnabled,
 } from "@/lib/channels/realtime";
 import { AppError } from "@/lib/store";
+import { finalizePhoneBookingSms } from "@/lib/channels/phone-sms";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,7 +26,13 @@ export async function POST(request: Request) {
     if (!realtimeVoiceEnabled())
       throw new AppError("实时电话渠道尚未配置", 503);
     const input = parseRealtimeRequest(await readJson(request));
-    return json(handleRealtimeRequest(input));
+    const result = handleRealtimeRequest(input);
+    // handleRealtimeRequest has completed its synchronous transaction. SMS
+    // delivery is separate so provider failures cannot undo a reservation.
+    return json({
+      ...result,
+      prompt: await finalizePhoneBookingSms(input.callSid, result.prompt),
+    });
   } catch (error) {
     return apiError(error);
   }

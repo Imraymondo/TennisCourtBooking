@@ -6,8 +6,10 @@ import { POST as sms } from "../app/api/webhooks/sms/route";
 import { POST as voice } from "../app/api/webhooks/voice/route";
 import { authenticateEmail, prepareEmail } from "../lib/channels/email";
 import { COMMAND_HELP } from "../lib/channels/commands";
+import { spokenCredential } from "./spoken-credential";
 
 beforeEach(() => {
+  process.env.TWILIO_ACCOUNT_SID = "";
   process.env.VOICE_MODE = "gather";
   process.env.BOOKING_AI_ENABLED = "0";
   closeDatabase();
@@ -192,12 +194,12 @@ test("guided phone query, booking, view, modification and cancellation use short
     url = action.replaceAll("&amp;", "&");
     return { xml, requestUrl, fields };
   };
-  assert.match((await send()).xml, /欢迎使用/);
+  assert.match((await send()).xml, /您好/);
   await send("1");
   await send("20991201");
   await send("0");
   assert.match((await send("2")).xml, /可开始时间/);
-  assert.match((await send("2")).xml, /八位日期/);
+  assert.match((await send("2")).xml, /哪一天/);
   await send("20991201");
   await send("1");
   await send("23");
@@ -206,7 +208,8 @@ test("guided phone query, booking, view, modification and cancellation use short
   assert.match(contact.xml, /联系电话/);
   assert.equal(listBookings().length, 0);
   const confirmation = await send("1");
-  assert.match(confirmation.xml, /姓名将公开展示/);
+  assert.match(confirmation.xml, /预约人李四/);
+  assert.doesNotMatch(confirmation.xml, /姓名会公开显示/);
   assert.equal(listBookings().length, 0);
   const committed = await send("1");
   assert.equal(listBookings().length, 1);
@@ -215,22 +218,20 @@ test("guided phone query, booking, view, modification and cancellation use short
   ).text();
   assert.equal(duplicate, committed.xml);
   const id = listBookings()[0].id;
-  const rawCode = committed.xml
-    .match(/管理码：([^。]+)/)?.[1]
-    .replaceAll("，", "");
+  const rawCode = spokenCredential(committed.xml);
   assert.match(rawCode!, /^\d{10}$/);
   assert.equal(listBookings()[0].source, "phone");
   assert.equal(listBookings()[0].customerName, "李四");
   await send("5");
   await send(id);
-  assert.match((await send(rawCode!)).xml, new RegExp(id));
+  assert.match((await send(rawCode!)).xml, /预约已确认/);
   await send("3");
   await send(id);
   await send(rawCode!);
   await send("20991202");
   await send("2");
   await send("12");
-  assert.match((await send("3")).xml, /即将修改预约/);
+  assert.match((await send("3")).xml, /修改为/);
   assert.equal(listBookings()[0].version, 1);
   await send("1");
   assert.equal(listBookings()[0].version, 2);

@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Server } from "node:http";
 import type { Availability, Booking } from "../lib/domain";
 import { createVoiceRelay } from "../scripts/voice-relay.mjs";
+import { spokenCredential } from "./spoken-credential";
 
 // Only local sockets are used. These stand-ins never contact Twilio or ngrok.
 const publicOrigin = "https://local-phone.example";
@@ -318,18 +319,20 @@ test("signed speech crosses the real relay and production app, requires confirma
     path = callback.pathname + callback.search;
     return { ...result, turn };
   };
-  assert.match((await speak()).text, /欢迎使用/);
+  assert.match((await speak()).text, /您好，想预约球场还是查空档/);
   const requested = await speak("我要预定网球场");
   assert.match(requested.text, /哪一天/);
-  assert.doesNotMatch(requested.text, /欢迎使用/);
-  assert.match((await speak("2099年12月1日")).text, /选择一号球场或二号球场/);
+  assert.doesNotMatch(requested.text, /您好，想预约球场还是查空档/);
+  assert.match((await speak("2099年12月1日")).text, /想订一号场还是二号场/);
   assert.match((await speak("一号球场")).text, /几点开始/);
   assert.match((await speak("下午三点")).text, /几个小时/);
-  assert.match((await speak("默认")).text, /预约人的姓名/);
+  const nameQuestion = await speak("默认");
+  assert.match(nameQuestion.text, /预约人叫什么名字/);
+  assert.match(nameQuestion.text, /姓名会公开显示/);
   assert.match((await speak("我叫张三")).text, /联系电话/);
   const confirm = await speak("使用来电号码");
-  assert.match(confirm.text, /确认无误/);
-  assert.match(confirm.text, /姓名将公开展示/);
+  assert.match(confirm.text, /确认请说确认预约/);
+  assert.doesNotMatch(confirm.text, /姓名会公开显示/);
   assert.equal(
     (await publicSchedule()).courts.flatMap((court) => court.bookings).length,
     0,
@@ -337,7 +340,7 @@ test("signed speech crosses the real relay and production app, requires confirma
   );
 
   const committed = await speak("确认预定");
-  assert.match(committed.text, /网站日程已更新/);
+  assert.match(committed.text, /预约成功/);
   const schedule = await publicSchedule();
   const bookings = schedule.courts.flatMap((court) => court.bookings);
   assert.equal(bookings.length, 1);
@@ -372,9 +375,7 @@ test("signed speech crosses the real relay and production app, requires confirma
     "replaying the confirmation must not duplicate a booking",
   );
 
-  const accessCode = committed.text
-    .match(/管理码：([^。]+)/)?.[1]
-    .replaceAll("，", "");
+  const accessCode = spokenCredential(committed.text);
   assert.ok(
     accessCode && /^\d{10}$/.test(accessCode),
     "the caller receives a private spoken management code",

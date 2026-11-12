@@ -13,6 +13,7 @@ const WEBHOOK = "https://courts.example/api/webhooks/voice";
 
 beforeEach(() => {
   process.env.VOICE_MODE = "gather";
+  process.env.TWILIO_ACCOUNT_SID = "";
   process.env.BOOKING_AI_ENABLED = "0";
   closeDatabase();
   process.env.BOOKING_DB_PATH = ":memory:";
@@ -82,7 +83,7 @@ async function fillBookingToConfirmation() {
   await call.send();
   const intent = await call.send("我要预定网球场");
   assert.match(intent.xml, /哪一天/);
-  assert.doesNotMatch(intent.xml, /欢迎使用/);
+  assert.doesNotMatch(intent.xml, /您好，想预约球场还是查空档/);
   assert.equal(listBookings().length, 0);
   const availability = await call.send("2099年12月1日");
   assert.match(availability.xml, /可开始时间/);
@@ -93,12 +94,14 @@ async function fillBookingToConfirmation() {
   const summary = await call.send("使用来电号码");
   assert.match(summary.xml, /预约人张三/);
   assert.match(summary.xml, /联系电话/);
-  assert.match(summary.xml, /2小时/);
+  assert.match(summary.xml, /两小时/);
   assert.equal(listBookings().length, 0);
   return call;
 }
 
 test("ASR 预定 homophones and traditional forms retain the correct booking intent", () => {
+  assert.equal(parseIntent("查空档"), "query");
+  assert.equal(parseIntent("查空檔"), "query");
   for (const speech of [
     "我要预定网球场",
     "我想预定网球场",
@@ -149,7 +152,7 @@ test("homophone normalization permits explicit confirmation but never turns a ne
 test("real caller utterance follows the signed Gather action and completes one booking, with exact retry replay", async () => {
   const call = await fillBookingToConfirmation();
   const committed = await call.send("确认预定");
-  assert.match(committed.xml, /网站日程已更新/);
+  assert.match(committed.xml, /预约成功/);
   assert.equal(listBookings().length, 1);
   const booking = listBookings()[0];
   assert.equal(booking.customerName, "张三");
@@ -163,9 +166,9 @@ test("real caller utterance follows the signed Gather action and completes one b
 
 test("unrecognized menu speech prompts for intent without repeating the welcome introduction", async () => {
   const call = caller();
-  assert.match((await call.send()).xml, /欢迎使用/);
+  assert.match((await call.send()).xml, /您好，想预约球场还是查空档/);
   const response = await call.send("我想想");
-  assert.doesNotMatch(response.xml, /欢迎使用/);
+  assert.doesNotMatch(response.xml, /您好，想预约球场还是查空档/);
   assert.match(response.xml, /查询|预订|预约/);
   assert.equal(call.state().step, "menu");
   assert.equal(listBookings().length, 0);
@@ -180,7 +183,7 @@ test("an unknown stale or malformed turn gives a spoken read-only recovery inste
   for (const turn of [randomUUID(), "bad-session-value"]) {
     const recovery = await call.send("2099年12月1日", { turn });
     assert.match(recovery.xml, /哪一天/);
-    assert.doesNotMatch(recovery.xml, /欢迎使用/);
+    assert.doesNotMatch(recovery.xml, /您好，想预约球场还是查空档/);
     assert.equal(call.state().turn, pending.turn);
     assert.equal(call.state().step, "date");
     assert.equal(listBookings().length, 0);
@@ -221,7 +224,7 @@ test("a speech callback missing its turn recovers the current prompt without con
   assert.equal(call.state().step, "date");
   const recovered = await call.send("2099年12月1日", { bare: true });
   assert.match(recovered.xml, /哪一天/);
-  assert.doesNotMatch(recovered.xml, /欢迎使用/);
+  assert.doesNotMatch(recovered.xml, /您好，想预约球场还是查空档/);
   assert.equal(call.state().step, "date");
   assert.equal(call.state().action, "book");
   assert.equal(listBookings().length, 0);
@@ -235,7 +238,7 @@ test("missing-turn confirmation cannot mutate a pending booking; a correct new t
   const before = call.state();
   const recovered = await call.send("确认预定", { bare: true });
   assert.equal(listBookings().length, 0);
-  assert.doesNotMatch(recovered.xml, /网站日程已更新|欢迎使用/);
+  assert.doesNotMatch(recovered.xml, /预约成功|您好/);
   assert.match(recovered.xml, /预约人张三/);
   const after = call.state();
   for (const field of [
@@ -260,7 +263,7 @@ test("missing-turn confirmation cannot mutate a pending booking; a correct new t
 test("a bare speech callback without an existing session only starts a fresh prompt", async () => {
   const call = caller();
   const initial = await call.send("确认预定", { bare: true });
-  assert.match(initial.xml, /请告诉我.*(?:预定|预订).*查询/);
+  assert.match(initial.xml, /还需要预约球场或查空档/);
   assert.equal(call.state().step, "menu");
   assert.equal(listBookings().length, 0);
 });

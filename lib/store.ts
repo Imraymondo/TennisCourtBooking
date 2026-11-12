@@ -67,6 +67,21 @@ export function getDatabase(): DatabaseSync {
     CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, window_start INTEGER NOT NULL, count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS channel_events (id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS channel_state (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS phone_booking_sms_outbox (
+      id TEXT PRIMARY KEY,
+      call_sid TEXT NOT NULL,
+      booking_id TEXT NOT NULL REFERENCES bookings(id),
+      booking_snapshot TEXT NOT NULL,
+      access_code TEXT NOT NULL,
+      sender TEXT NOT NULL,
+      recipient TEXT NOT NULL,
+      body TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'submitted', 'failed', 'unknown')),
+      message_sid TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS phone_booking_sms_call ON phone_booking_sms_outbox(call_sid, booking_id);
   `);
   return database;
 }
@@ -507,4 +522,115 @@ export function claimChannelState(
     )
     .run(key, value, now + ttlMs, now);
   return Number(result.changes) > 0;
+}
+
+export type PhoneBookingSmsStatus =
+  | "pending"
+  | "processing"
+  | "submitted"
+  | "failed"
+  | "unknown";
+
+export type PhoneBookingSmsOutbox = {
+  id: string;
+  callSid: string;
+  booking: Booking;
+  accessCode: string;
+  sender: string;
+  recipient: string;
+  body: string;
+  status: PhoneBookingSmsStatus;
+  messageSid: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+function toPhoneBookingSms(row: Row): PhoneBookingSmsOutbox {
+  return {
+    id: String(row.id),
+    callSid: String(row.call_sid),
+    booking: JSON.parse(String(row.booking_snapshot)) as Booking,
+    accessCode: String(row.access_code),
+    sender: String(row.sender),
+    recipient: String(row.recipient),
+    body: String(row.body),
+    status: row.status as PhoneBookingSmsStatus,
+    messageSid: row.message_sid === null ? null : String(row.message_sid),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+// Called synchronously alongside booking creation, so an enclosing channel-event
+// transaction commits (or rolls back) both the booking and its private receipt.
+export function savePhoneBookingSmsOutbox(
+  value: Pick<
+    PhoneBookingSmsOutbox,
+    "callSid" | "booking" | "accessCode" | "sender" | "recipient" | "body"
+  >,
+): boolean {
+  const id = `phone-booking:${value.booking.id}:created`;
+  const now = Date.now();
+  const db = getDatabase();
+  db.prepare(
+    "INSERT OR IGNORE INTO phone_booking_sms_outbox (id, call_sid, booking_id, booking_snapshot, access_code, sender, recipient, body, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+  ).run(
+    id,
+    value.callSid,
+    value.booking.id,
+    JSON.stringify(value.booking),
+    value.accessCode,
+    value.sender,
+    value.recipient,
+    value.body,
+    now,
+    now,
+  );
+  const row = db
+    .prepare("SELECT call_sid FROM phone_booking_sms_outbox WHERE id = ?")
+    .get(id);
+  return row?.call_sid === value.callSid;
+}
+
+export function getPhoneBookingSmsOutbox(
+  callSid: string,
+  bookingId: string,
+): PhoneBookingSmsOutbox | null {
+  const row = getDatabase()
+    .prepare(
+      "SELECT * FROM phone_booking_sms_outbox WHERE call_sid = ? AND booking_id = ?",
+    )
+    .get(callSid, bookingId) as Row | undefined;
+  return row ? toPhoneBookingSms(row) : null;
+}
+
+// A persistent, atomic claim prevents another process from submitting the same
+// receipt. Processing rows are never returned to pending after an uncertain send.
+export function claimPhoneBookingSmsOutbox(id: string): boolean {
+  const result = getDatabase()
+    .prepare(
+      "UPDATE phone_booking_sms_outbox SET status = 'processing', updated_at = ? WHERE id = ? AND status = 'pending'",
+    )
+    .run(Date.now(), id);
+  return Number(result.changes) === 1;
+}
+
+export function finishPhoneBookingSmsOutbox(
+  id: string,
+  status: "submitted" | "failed" | "unknown",
+  messageSid: string | null = null,
+): void {
+  getDatabase()
+    .prepare(
+      "UPDATE phone_booking_sms_outbox SET status = ?, message_sid = ?, updated_at = ? WHERE id = ? AND status = 'processing'",
+    )
+    .run(status, messageSid, Date.now(), id);
+}
+
+export function expirePhoneBookingSmsOutbox(id: string, before: number): void {
+  getDatabase()
+    .prepare(
+      "UPDATE phone_booking_sms_outbox SET status = 'unknown', updated_at = ? WHERE id = ? AND status = 'processing' AND updated_at <= ?",
+    )
+    .run(Date.now(), id, before);
 }

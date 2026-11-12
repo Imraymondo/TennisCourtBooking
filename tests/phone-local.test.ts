@@ -7,6 +7,7 @@ const script = resolve("scripts/phone-local.mjs");
 const fakeSettings = {
   TWILIO_AUTH_TOKEN: "test-only-twilio-secret-do-not-display",
   TWILIO_PHONE_NUMBER: "+61400000123",
+  TWILIO_ACCOUNT_SID: "",
   NGROK_AUTHTOKEN: "test-only-ngrok-secret-do-not-display",
   PHONE_WEB_PORT: "3000",
   NGROK_DOMAIN: "",
@@ -115,7 +116,35 @@ test("valid fake settings pass a non-network check without revealing any values"
   assert.ok(result.output.includes("does not connect"));
   assert.ok(result.output.includes("Booking language: rule-based"));
   assert.ok(result.output.includes("Voice mode: Twilio Gather"));
+  assert.ok(
+    result.output.includes(
+      "Phone booking SMS: not configured (TWILIO_ACCOUNT_SID is missing).",
+    ),
+  );
   assertPrivate(result.output);
+});
+
+test("phone booking SMS is optional and preflight never reveals or uses the account SID", () => {
+  const sid = `AC${"a1".repeat(16)}`;
+  const configured = check({ TWILIO_ACCOUNT_SID: sid });
+  assert.equal(configured.status, 0, configured.output);
+  assert.ok(configured.output.includes("Phone booking SMS: configured"));
+  assertPrivate(configured.output, [...Object.values(fakeSettings), sid]);
+
+  for (const invalid of [
+    "private-invalid-account-sid",
+    "ACshort",
+    `${sid}\n`,
+  ]) {
+    const result = check({ TWILIO_ACCOUNT_SID: invalid });
+    assert.equal(result.status, 0, result.output);
+    assert.ok(
+      result.output.includes(
+        "Phone booking SMS: not configured (TWILIO_ACCOUNT_SID must be AC followed by 32 hexadecimal characters).",
+      ),
+    );
+    assertPrivate(result.output, [...Object.values(fakeSettings), invalid]);
+  }
 });
 
 test("empty/off AI test settings override inherited environment values without exposing them", () => {
@@ -128,6 +157,7 @@ test("empty/off AI test settings override inherited environment values without e
     "OPENAI_REALTIME_VOICE",
     "OPENAI_REALTIME_TRANSCRIBE_MODEL",
     "REALTIME_BRIDGE_SECRET",
+    "TWILIO_ACCOUNT_SID",
   ] as const;
   const saved = Object.fromEntries(
     names.map((name) => [name, process.env[name]]),
@@ -143,10 +173,12 @@ test("empty/off AI test settings override inherited environment values without e
     process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL =
       "private-inherited-transcriber";
     process.env.REALTIME_BRIDGE_SECRET = "private-inherited-bridge-secret";
+    process.env.TWILIO_ACCOUNT_SID = `AC${"b2".repeat(16)}`;
     const result = check();
     assert.equal(result.status, 0, result.output);
     assert.ok(result.output.includes("Booking language: rule-based"));
     assert.ok(result.output.includes("Voice mode: Twilio Gather"));
+    assert.ok(result.output.includes("TWILIO_ACCOUNT_SID is missing"));
     assertPrivate(
       result.output,
       names

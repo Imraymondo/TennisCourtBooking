@@ -18,6 +18,7 @@ const WEBHOOK_URL = "https://courts.example/api/webhooks/voice";
 const PHONE = "+61400123456";
 
 beforeEach(() => {
+  process.env.TWILIO_ACCOUNT_SID = "";
   closeDatabase();
   process.env.BOOKING_DB_PATH = ":memory:";
   process.env.APP_BASE_URL = "https://courts.example";
@@ -274,7 +275,7 @@ test("natural fields fill the existing voice form and only a raw confirmation wr
   const first = await confirm.response();
   assert.equal(first.status, 200);
   const result = await first.json();
-  assert.match(result.prompt, /网站日程已更新/);
+  assert.match(result.prompt, /预约成功/);
   assert.match(result.prompt, /预约编号/);
   assert.match(result.prompt, /管理码/);
   assert.doesNotMatch(result.prompt, /<Say|<Gather|&amp;|&lt;/);

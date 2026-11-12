@@ -22,6 +22,7 @@ import {
 
 beforeEach(() => {
   process.env.VOICE_MODE = "gather";
+  process.env.TWILIO_ACCOUNT_SID = "";
   closeDatabase();
   process.env.BOOKING_DB_PATH = ":memory:";
   process.env.APP_BASE_URL = "https://courts.example";
@@ -82,7 +83,8 @@ function pendingBooking() {
   assert.equal(call.state().step, "contact");
   const summary = call.send("使用来电号码");
   assert.match(summary, /预约人张三/);
-  assert.match(summary, /3小时/);
+  assert.match(summary, /三小时/);
+  assert.match(summary, /姓名会公开显示/);
   assert.equal(call.state().step, "confirm");
   assert.equal(listBookings().length, 0);
   return call;
@@ -92,7 +94,7 @@ test("voice understanding fills several fields while a later raw confirmation ow
   const call = pendingBooking();
   const summaryTurn = call.state().turn;
   const committed = call.send("确认预约");
-  assert.match(committed, /网站日程已更新/);
+  assert.match(committed, /预约成功/);
   assert.equal(listBookings().length, 1);
   const booking = listBookings()[0];
   assert.equal(booking.courtId, 2);
@@ -120,8 +122,8 @@ test("a model schedule correction is reviewed and needs a new explicit confirmat
     "换成晚上六点只打一小时",
     understanding({ hour: "18", duration: 1, correction: "hour" }),
   );
-  assert.match(revised, /18:00/);
-  assert.match(revised, /1小时/);
+  assert.match(revised, /晚上六点/);
+  assert.match(revised, /一小时/);
   assert.equal(call.state().step, "confirm");
   assert.equal(listBookings().length, 0);
   call.send("确认预约");

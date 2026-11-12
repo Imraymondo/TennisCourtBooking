@@ -12,6 +12,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { Availability, Booking } from "../lib/domain";
 import { createRealtimeBridge } from "../scripts/realtime-bridge.mjs";
 import { createVoiceRelay } from "../scripts/voice-relay.mjs";
+import { spokenCredential } from "./spoken-credential";
 
 // Every network connection stays on loopback. The provider emits scripted
 // transcription/tool/audio events; this does not test speech recognition.
@@ -557,7 +558,7 @@ test(
     assert.deepEqual(object(audio.input).format, { type: "audio/pcmu" });
     assert.deepEqual(object(audio.output).format, { type: "audio/pcmu" });
     await provider.prompts.wait(
-      (prompt) => /欢迎使用/.test(prompt),
+      (prompt) => /您好，想预约球场还是查空档/.test(prompt),
       "booking greeting",
     );
     const output = await twilio.messages.wait(
@@ -584,7 +585,7 @@ test(
       "我要预约2099年12月1日下午三点一号球场两个小时，我叫张三",
     );
     await provider.prompts.wait(
-      (prompt) => /请提供联系电话/.test(prompt),
+      (prompt) => /联系电话/.test(prompt),
       "contact question",
     );
     assert.equal(provider.toolResponses, 1);
@@ -594,7 +595,7 @@ test(
     );
     provider.transcript("item_contact", "使用来电号码");
     const summary = await provider.prompts.wait(
-      (prompt) => /确认无误/.test(prompt),
+      (prompt) => /确认请说确认预约/.test(prompt),
       "uncommitted booking review",
     );
     assert.match(summary, /预约人张三/);
@@ -605,7 +606,7 @@ test(
     );
     provider.transcript("item_confirm", "确认预约");
     const committed = await provider.prompts.wait(
-      (prompt) => /网站日程已更新/.test(prompt),
+      (prompt) => /预约成功/.test(prompt),
       "committed booking and management code",
     );
     assert.equal(
@@ -624,9 +625,7 @@ test(
       Date.parse(booking.endsAt) - Date.parse(booking.startsAt),
       7_200_000,
     );
-    const accessCode = committed
-      .match(/管理码：([^。]+)/)?.[1]
-      .replaceAll("，", "");
+    const accessCode = spokenCredential(committed);
     assert.ok(accessCode && /^\d{10}$/.test(accessCode));
     const serialized = JSON.stringify(publicSchedule);
     assert.ok(
@@ -737,7 +736,7 @@ test(
     );
     provider.omitFunctionCalls = true;
     await provider.prompts.wait(
-      (prompt) => /欢迎使用/.test(prompt),
+      (prompt) => /您好，想预约球场还是查空档/.test(prompt),
       "raw-speech booking greeting",
     );
 
@@ -767,7 +766,7 @@ test(
     const available = await answer(
       "raw_date",
       "2099年12月2日",
-      /请选择|选择一号球场/,
+      /想订一号场还是二号场/,
       "available courts after the raw date",
     );
     assert.match(available, /可开始时间/);
@@ -776,31 +775,31 @@ test(
     assert.equal((await bookings()).length, 0);
     await answer("raw_court", "一号球场", /几点开始/, "start time question");
     assert.equal((await bookings()).length, 0);
-    await answer("raw_hour", "下午三点", /预订几个小时/, "duration question");
+    await answer("raw_hour", "下午三点", /几个小时/, "duration question");
     assert.equal((await bookings()).length, 0);
     await answer(
       "raw_duration",
       "默认",
-      /预约人的姓名/,
+      /预约人叫什么名字/,
       "public name question",
     );
     assert.equal((await bookings()).length, 0);
-    await answer("raw_name", "我叫李四", /请提供联系电话/, "contact question");
+    await answer("raw_name", "我叫李四", /联系电话/, "contact question");
     assert.equal((await bookings()).length, 0);
     assert.equal(provider.toolResponses, 6);
     const review = await answer(
       "raw_contact",
       "使用来电号码",
-      /确认无误/,
+      /确认请说确认预约/,
       "uncommitted raw-speech booking review",
     );
     assert.match(review, /预约人李四/);
-    assert.match(review, /2小时/);
+    assert.match(review, /两小时/);
     assert.equal((await bookings()).length, 0);
     await answer(
       "raw_confirm",
       "确认预约",
-      /网站日程已更新/,
+      /预约成功/,
       "raw-speech booking committed after confirmation",
     );
     assert.equal(
@@ -820,7 +819,12 @@ test(
 
     // A following raw answer is a barrier for the duplicate confirmation.
     provider.transcript("raw_confirm", "确认预约");
-    await answer("raw_after_replay", "不确认", /请告诉我/, "turn after replay");
+    await answer(
+      "raw_after_replay",
+      "不确认",
+      /还需要预约球场或查空档/,
+      "turn after replay",
+    );
     assert.equal((await bookings()).length, 1);
     twilio.socket.send(
       JSON.stringify({ event: "stop", streamSid: call.streamSid }),

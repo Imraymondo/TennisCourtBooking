@@ -3,10 +3,11 @@ import { after, beforeEach, test } from "node:test";
 import { createHmac, randomUUID } from "node:crypto";
 import { POST as voice } from "../app/api/webhooks/voice/route";
 import { GET as publicAvailability } from "../app/api/availability/route";
-import { closeDatabase, listBookings } from "../lib/store";
+import { closeDatabase, createBooking, listBookings } from "../lib/store";
 
 beforeEach(() => {
   process.env.VOICE_MODE = "gather";
+  process.env.TWILIO_ACCOUNT_SID = "";
   process.env.BOOKING_AI_ENABLED = "0";
   closeDatabase();
   process.env.BOOKING_DB_PATH = ":memory:";
@@ -64,13 +65,19 @@ async function pendingBooking(name = "张三") {
   assert.match(available.xml, /2号场/);
   await say("一号球场");
   await say("下午三点");
-  await say("默认");
+  const nameQuestion = await say("默认");
+  assert.match(nameQuestion.xml, /姓名会公开显示/);
   const contact = await say(`我叫${name}`);
   assert.match(contact.xml, /联系电话/);
   const summary = await say("使用来电号码");
   assert.match(summary.xml, new RegExp(name));
   assert.match(summary.xml, /联系电话/);
-  assert.match(summary.xml, /2小时/);
+  assert.match(summary.xml, /两小时/);
+  assert.match(summary.xml, /联系电话使用来电号码/);
+  assert.doesNotMatch(
+    summary.xml,
+    /61400123456|六一四零|姓名会公开|15:00|2099-/,
+  );
   return say;
 }
 
@@ -83,7 +90,11 @@ test("spoken booking collects name and confirmed contact, stays on topic, and on
   await say("我还没确认");
   assert.equal(listBookings().length, 0);
   const committed = await say("确认预约");
-  assert.match(committed.xml, /网站日程已更新/);
+  assert.match(committed.xml, /预约成功/);
+  assert.match(committed.xml, /短信暂不可用/);
+  assert.equal([...committed.xml.matchAll(/预约编号：/g)].length, 1);
+  assert.equal([...committed.xml.matchAll(/管理码：/g)].length, 1);
+  assert.doesNotMatch(committed.xml, /再次播报|网站日程已更新/);
   assert.equal(listBookings().length, 1);
   const booking = listBookings()[0];
   assert.equal(booking.customerName, "张三");
@@ -152,7 +163,7 @@ test("half-hour requests and unrelated questions are rejected; an alternative sp
   await say("两个小时");
   await say("我叫王五");
   const summary = await say("我的电话是零四一二三四五六七八");
-  assert.match(summary.xml, /0，4，1，2，3，4，5，6，7，8/);
+  assert.match(summary.xml, /零四一二，三四五六，七八/);
   assert.equal(listBookings().length, 0);
   await say("确认预约");
   assert.equal(listBookings()[0].phone, "0412345678");
@@ -171,4 +182,24 @@ test("one spoken request can supply intent, date, court and hour without losing 
   await say("确认预约");
   assert.equal(listBookings()[0].courtId, 2);
   assert.equal(listBookings()[0].startsAt, "2099-12-01T04:00:00Z");
+});
+
+test("spoken availability reports real open starts in natural hours without disclosing other bookings", async () => {
+  createBooking({
+    courtId: 1,
+    startLocal: "2099-12-01T15:00",
+    durationHours: 2,
+    customerName: "其他预约人",
+    phone: "+61400999999",
+    source: "web",
+  });
+  const say = caller();
+  await say();
+  await say("查空档");
+  await say("2099年12月1日");
+  await say("一号球场");
+  const reply = await say("默认");
+  assert.match(reply.xml, /1号场：凌晨零点到下午一点、下午五点到晚上十一点/);
+  assert.doesNotMatch(reply.xml, /2号场|其他预约人|999999|\d{2}:00|2099-/);
+  assert.equal(listBookings().length, 1);
 });

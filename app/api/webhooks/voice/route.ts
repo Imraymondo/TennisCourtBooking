@@ -9,6 +9,7 @@ import {
   interpretBookingText,
 } from "@/lib/channels/booking-ai";
 import { logVoiceCallback } from "@/lib/channels/voice-diagnostics";
+import { finalizePhoneBookingSms } from "@/lib/channels/phone-sms";
 import {
   createRealtimeVoice,
   realtimeVoiceEnabled,
@@ -108,6 +109,9 @@ export async function POST(request: Request) {
         if (pendingTurns.get(key) === pending) pendingTurns.delete(key);
       }
     }
+    // The booking and notification are committed before any provider request.
+    // A failed text message changes only the spoken receipt, never the booking.
+    const responseXml = await finalizePhoneBookingSms(callSid, xml);
     if (diagnostic)
       logVoiceCallback(form, {
         turn,
@@ -115,9 +119,9 @@ export async function POST(request: Request) {
         after: voiceProgress(callSid),
         handling: "routed",
         cached,
-        responseXml: xml,
+        responseXml,
       });
-    return xmlResponse(xml);
+    return xmlResponse(responseXml);
   } catch (error) {
     return webhookFailure(error);
   }

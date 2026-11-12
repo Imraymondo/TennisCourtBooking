@@ -119,6 +119,12 @@ const bookingLanguageStatus = bookingAiEnabled
 const voiceModeStatus = realtimeEnabled
   ? `Voice mode: OpenAI Realtime (model ${realtimeModel})`
   : "Voice mode: Twilio Gather";
+const accountSid = process.env.TWILIO_ACCOUNT_SID || "";
+const phoneBookingSmsStatus = /^AC[0-9a-fA-F]{32}$/.test(accountSid)
+  ? "Phone booking SMS: configured"
+  : accountSid
+    ? "Phone booking SMS: not configured (TWILIO_ACCOUNT_SID must be AC followed by 32 hexadecimal characters)."
+    : "Phone booking SMS: not configured (TWILIO_ACCOUNT_SID is missing).";
 if (process.argv.includes("--check")) {
   console.log(
     "Required local settings are present; no credential values were displayed.",
@@ -128,6 +134,7 @@ if (process.argv.includes("--check")) {
   );
   console.log(bookingLanguageStatus);
   console.log(voiceModeStatus);
+  console.log(phoneBookingSmsStatus);
   if (enableSms)
     console.log(
       "SMS callback forwarding requested; verify SMS capability in the Twilio console before testing.",
@@ -355,6 +362,7 @@ try {
       console.log(`Local website: http://127.0.0.1:${webPort}`);
       console.log(bookingLanguageStatus);
       console.log(voiceModeStatus);
+      console.log(phoneBookingSmsStatus);
       if (childEnvironment.VOICE_DEBUG === "1")
         console.log(
           realtimeEnabled

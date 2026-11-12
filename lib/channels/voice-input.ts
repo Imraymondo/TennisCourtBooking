@@ -119,7 +119,7 @@ export function parseIntent(input: string): VoiceIntent | null {
   )
     intents.add("view");
   if (
-    /可用|空闲|空閒|空场|空場|有没有(?:空|场地|球场)|还有(?:空|场地)|查询|查一下|查场|查場|查可用|空位|availability|available|query/.test(
+    /可用|空闲|空閒|空档|空檔|空场|空場|有没有(?:空|场地|球场)|还有(?:空|场地)|查询|查一下|查场|查場|查可用|空位|availability|available|query/.test(
       value,
     )
   )

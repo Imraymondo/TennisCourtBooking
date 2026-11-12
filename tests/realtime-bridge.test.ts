@@ -551,6 +551,14 @@ test("GA Realtime uses PCMU, trusted Mandarin transcription and manual responses
   assert.ok(
     String(field(greeting, "response", "instructions")).includes(WELCOME),
   );
+  const speechInstructions = String(
+    field(greeting, "response", "instructions"),
+  );
+  assert.match(speechInstructions, /自然、流畅的普通话/);
+  assert.match(speechInstructions, /不要逐字停顿/);
+  assert.match(speechInstructions, /不重复问题、句子、编号或管理码/);
+  assert.match(speechInstructions, /日期和时间按提示中的中文说法读/);
+  assert.equal(JSON.parse(speechInstructions.split("\n").at(-1)!), WELCOME);
 
   const input = Buffer.from([0, 1, 127, 128, 254, 255]).toString("base64");
   twilio.send({

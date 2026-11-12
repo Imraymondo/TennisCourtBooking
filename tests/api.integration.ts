@@ -104,6 +104,7 @@ before(
         env: {
           ...childEnvironment,
           BOOKING_AI_ENABLED: "0",
+          TWILIO_ACCOUNT_SID: "",
           VOICE_MODE: "gather",
           REALTIME_BRIDGE_SECRET: "",
           OPENAI_API_KEY: "",
