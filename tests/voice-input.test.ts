@@ -71,6 +71,66 @@ test("calendar dates parse Chinese numerals, years and year boundaries without a
   assert.equal(parseCalendarDate("十一月十日或十一日", "2026-11-06"), null);
 });
 
+test("matching relative and explicit spoken dates describe one Sydney calendar day", () => {
+  for (const text of [
+    "明天11月13号",
+    "明天十一月十三号",
+    "明天，１１月１３號。",
+    "明日十一月十三號",
+    "11月13号，也就是明天",
+    "明天2026年11月13日",
+    "明天2026-11-13",
+    "明天11月13号星期五",
+    "明天十一月十三号禮拜五",
+  ]) {
+    assert.equal(parseCalendarDate(text, "2026-11-12"), "2026-11-13", text);
+  }
+  assert.equal(
+    parseCalendarDate("下周一，11月16日", "2026-11-12"),
+    "2026-11-16",
+  );
+  assert.equal(
+    parseCalendarDate("明天2027年1月1日星期五", "2026-12-31"),
+    "2027-01-01",
+  );
+  assert.equal(parseCalendarDate("明天一月一号", "2026-12-31"), "2027-01-01");
+});
+
+test("matching dates remain unselected when spoken as explicit alternatives", () => {
+  for (const text of [
+    "明天或11月13号",
+    "明天或者十一月十三号",
+    "明天还是11月13日",
+    "明天還是十一月十三號",
+    "明天、11月13号",
+    "明天要不11月13号",
+  ]) {
+    assert.equal(parseCalendarDate(text, "2026-11-12"), null, text);
+  }
+});
+
+test("conflicting and invalid date mentions cannot hide behind a valid date", () => {
+  for (const text of [
+    "明天11月14号",
+    "明天11月13号星期六",
+    "11月13号11月14号",
+    "明天2027年11月13号",
+    "明天13月13号",
+    "13月13号明天",
+    "明天11月31号",
+    "11月31号明天",
+    "明天2026年2月30号",
+    "2026年2月30号明天",
+    "明天2026-02-30",
+    "2026-02-30明天",
+  ]) {
+    assert.equal(parseCalendarDate(text, "2026-11-12"), null, text);
+  }
+  assert.equal(parseCalendarDate("明天1月2日", "2026-12-31"), null);
+  assert.equal(parseCalendarDate("明天1月1日星期六", "2026-12-31"), null);
+  assert.equal(parseCalendarDate("不知道哪天", "2026-11-12"), null);
+});
+
 test("whole-hour parser understands Chinese AM/PM and rejects fractional or ambiguous ranges", () => {
   assert.equal(parseHourSpeech("下午三点"), "15");
   assert.equal(parseHourSpeech("晚上十一点"), "23");

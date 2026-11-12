@@ -254,9 +254,12 @@ export function parseCalendarDate(
       ? today.add({ days: count }).toString()
       : null;
   });
-  // More than one mentioned date is ambiguous, even if both happen to resolve
-  // to the same day. Ask instead of silently choosing one alternative.
-  return candidates.length === 1 ? candidates[0].date : null;
+  // A caller may clarify one date in several ways, such as 明天十一月十三号.
+  // Every mention must resolve successfully to that same calendar day.
+  const date = candidates[0]?.date;
+  return date && candidates.every((candidate) => candidate.date === date)
+    ? date
+    : null;
 }
 
 export function parseCourtSpeech(input: string): 0 | 1 | 2 | null {

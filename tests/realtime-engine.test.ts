@@ -305,6 +305,70 @@ test("natural fields fill the existing voice form and only a raw confirmation wr
     );
 });
 
+test("raw Realtime booking accepts matching relative and calendar dates and asks again when they conflict", async (t) => {
+  t.mock.timers.enable({
+    apis: ["Date"],
+    now: new Date("2026-11-12T00:00:00Z"),
+  });
+  t.after(() => t.mock.timers.reset());
+  const rawTurn = async (
+    call: ReturnType<typeof ticketedCall>,
+    transcript: string,
+  ) => {
+    const turn = call.send(transcript);
+    assert.equal(Object.hasOwn(turn.body, "interpretation"), false);
+    const response = await turn.response();
+    assert.equal(response.status, 200);
+    assert.equal(
+      listBookings().length,
+      0,
+      "raw fields do not confirm a booking",
+    );
+    return response.json();
+  };
+  const call = ticketedCall();
+  assert.equal((await call.start()).status, 200);
+  assert.equal((await rawTurn(call, "我要预定")).context.step, "date");
+  const dateTurn = call.send("明天11月13号");
+  const dateResponse = await dateTurn.response();
+  assert.equal(dateResponse.status, 200);
+  const dateReply = await dateResponse.json();
+  assert.equal(dateReply.context.step, "court");
+  assert.equal(dateReply.context.date, "2026-11-13");
+  assert.equal(call.state().date, "2026-11-13");
+  assert.deepEqual(await (await dateTurn.response()).json(), dateReply);
+  assert.equal(listBookings().length, 0);
+
+  const conflicting = ticketedCall();
+  assert.equal((await conflicting.start()).status, 200);
+  assert.equal((await rawTurn(conflicting, "我要预定")).context.step, "date");
+  const conflict = await rawTurn(conflicting, "明天11月14号");
+  assert.equal(conflict.context.step, "date");
+  assert.equal(conflicting.state().date, undefined);
+  const corrected = await rawTurn(conflicting, "明天，11月13号。");
+  assert.equal(corrected.context.step, "court");
+  assert.equal(corrected.context.date, "2026-11-13");
+
+  for (const transcript of [
+    "一号球场",
+    "下午三点",
+    "两个小时",
+    "我叫张三",
+    "使用来电号码",
+  ])
+    await rawTurn(call, transcript);
+  assert.equal(call.state().step, "confirm");
+  const confirmation = call.send("确认预约");
+  const committed = await confirmation.response();
+  assert.equal(committed.status, 200);
+  const receipt = await committed.json();
+  assert.match(receipt.prompt, /预约成功/);
+  assert.equal(listBookings().length, 1);
+  assert.equal(listBookings()[0].startsAt, "2026-11-13T04:00:00Z");
+  assert.deepEqual(await (await confirmation.response()).json(), receipt);
+  assert.equal(listBookings().length, 1);
+});
+
 test("model arguments cannot manufacture a confirmation or override raw denial", async () => {
   const call = await pendingBooking();
   const invented = await call

@@ -765,7 +765,9 @@ test(
     assert.equal((await bookings()).length, 0);
     const available = await answer(
       "raw_date",
-      "2099年12月2日",
+      // Repeating the same date in another format is a clarification, just as
+      // saying "明天11月13号" on November 12 is one requested calendar day.
+      "2099年12月2日，也就是2099-12-02",
       /想订一号场还是二号场/,
       "available courts after the raw date",
     );
