@@ -76,7 +76,10 @@ export function baseUrl(): string {
 }
 
 export function twilioConfigured(): boolean {
-  if (!process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_PHONE_NUMBER)
+  if (
+    !process.env.TWILIO_AUTH_TOKEN?.trim() ||
+    !process.env.TWILIO_PHONE_NUMBER
+  )
     return false;
   try {
     baseUrl();
@@ -86,7 +89,10 @@ export function twilioConfigured(): boolean {
   }
 }
 
-export async function verifiedTwilioForm(
+// Verify the signed public callback URL and form independently of direction.
+// Outbound call callbacks have the customer's number in To; their caller and
+// recipient are checked against the saved attendance attempt by its handler.
+export async function verifiedTwilioCallbackForm(
   request: Request,
 ): Promise<URLSearchParams> {
   if (!twilioConfigured()) throw new AppError("电话和短信渠道尚未配置", 503);
@@ -105,7 +111,7 @@ export async function verifiedTwilioForm(
   const originalUrl = `${baseUrl()}${path.pathname}${path.search}`;
   const material =
     originalUrl + keys.map((key) => `${key}${form.get(key)}`).join("");
-  const signature = createHmac("sha1", process.env.TWILIO_AUTH_TOKEN!)
+  const signature = createHmac("sha1", process.env.TWILIO_AUTH_TOKEN!.trim())
     .update(material)
     .digest("base64");
   if (
@@ -113,6 +119,13 @@ export async function verifiedTwilioForm(
   ) {
     throw new AppError("无效的 Twilio 签名", 403);
   }
+  return form;
+}
+
+export async function verifiedTwilioForm(
+  request: Request,
+): Promise<URLSearchParams> {
+  const form = await verifiedTwilioCallbackForm(request);
   if (
     form.get("To") !== process.env.TWILIO_PHONE_NUMBER ||
     !/^\+\d{7,15}$/.test(form.get("From") || "")

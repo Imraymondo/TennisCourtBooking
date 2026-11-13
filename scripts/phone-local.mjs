@@ -125,6 +125,11 @@ const phoneBookingSmsStatus = /^AC[0-9a-fA-F]{32}$/.test(accountSid)
   : accountSid
     ? "Phone booking SMS: not configured (TWILIO_ACCOUNT_SID must be AC followed by 32 hexadecimal characters)."
     : "Phone booking SMS: not configured (TWILIO_ACCOUNT_SID is missing).";
+const attendanceCallStatus = /^AC[0-9a-fA-F]{32}$/.test(accountSid)
+  ? "Attendance calls: configured (public callback URL is set when the local tunnel starts)."
+  : accountSid
+    ? "Attendance calls: not configured (TWILIO_ACCOUNT_SID must be AC followed by 32 hexadecimal characters)."
+    : "Attendance calls: not configured (TWILIO_ACCOUNT_SID is missing; add it to .env.local and restart).";
 if (process.argv.includes("--check")) {
   console.log(
     "Required local settings are present; no credential values were displayed.",
@@ -135,6 +140,7 @@ if (process.argv.includes("--check")) {
   console.log(bookingLanguageStatus);
   console.log(voiceModeStatus);
   console.log(phoneBookingSmsStatus);
+  console.log(attendanceCallStatus);
   if (enableSms)
     console.log(
       "SMS callback forwarding requested; verify SMS capability in the Twilio console before testing.",
@@ -212,8 +218,8 @@ try {
   const ngrok = (await import("@ngrok/ngrok")).default;
   console.log(
     enableSms
-      ? "Opening a temporary HTTPS endpoint for voice and SMS webhooks only..."
-      : "Opening a temporary HTTPS endpoint for the voice webhook only...",
+      ? "Opening a temporary HTTPS endpoint for voice, attendance and SMS webhooks only..."
+      : "Opening a temporary HTTPS endpoint for voice and attendance webhooks only...",
   );
   let openingTimer;
   try {
@@ -334,7 +340,9 @@ try {
     if (!stopping) {
       // Compile each enabled route before the first real callback. Unsigned
       // probes must be denied without creating bookings or contacting providers.
-      for (const channel of enableSms ? ["voice", "sms"] : ["voice"]) {
+      for (const channel of enableSms
+        ? ["voice", "attendance", "sms"]
+        : ["voice", "attendance"]) {
         const warm = await fetch(
           `http://127.0.0.1:${webPort}/api/webhooks/${channel}`,
           {
@@ -363,6 +371,7 @@ try {
       console.log(bookingLanguageStatus);
       console.log(voiceModeStatus);
       console.log(phoneBookingSmsStatus);
+      console.log(attendanceCallStatus);
       if (childEnvironment.VOICE_DEBUG === "1")
         console.log(
           realtimeEnabled
@@ -371,6 +380,9 @@ try {
         );
       console.log(
         `Twilio Voice webhook (POST): ${external.origin}/api/webhooks/voice`,
+      );
+      console.log(
+        `Attendance callback (POST; configured automatically): ${external.origin}/api/webhooks/attendance`,
       );
       if (realtimeEnabled)
         console.log(
@@ -381,7 +393,7 @@ try {
           `Twilio Messaging webhook (POST): ${external.origin}/api/webhooks/sms`,
         );
       console.log(
-        `Only signed ${enableSms ? "voice and SMS" : "voice"} webhook requests${realtimeEnabled ? " and the authenticated Realtime audio stream" : ""} are forwarded. The public endpoint does not expose the website, staff pages or internal booking API.`,
+        `Only signed ${enableSms ? "voice, attendance and SMS" : "voice and attendance"} webhook requests${realtimeEnabled ? " and the authenticated Realtime audio stream" : ""} are forwarded. The public endpoint does not expose the website, staff pages or internal booking API.`,
       );
       console.log(
         "Set the Voice URL under the Twilio number's Voice > A CALL COMES IN > Webhook > HTTP POST, then call your Twilio number.",

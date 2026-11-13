@@ -10,6 +10,7 @@ import { test, type TestContext } from "node:test";
 import { createVoiceRelay } from "../scripts/voice-relay.mjs";
 
 const voicePath = "/api/webhooks/voice";
+const attendancePath = "/api/webhooks/attendance";
 const smsPath = "/api/webhooks/sms";
 const signature = "local-relay-test-signature-not-a-real-credential";
 const formHeaders = {
@@ -107,14 +108,16 @@ function send(
   });
 }
 
-for (const channel of ["voice", "sms"]) {
+for (const channel of ["voice", "attendance", "sms"]) {
   test(`${channel} relay preserves signed form bytes and encoded query while stripping browser credentials and forwarding headers`, async (t) => {
     const body = Buffer.from(
       channel === "sms"
         ? "Body=%E6%9F%A5%E8%AF%A2+2031-02-01+%2B&MessageSid=SMlocaltest&From=%2B61400123456&To=%2B61255550100"
-        : "Digits=01&SpeechResult=%E5%BC%A0%E4%B8%89+%2B&From=%2B61400123456&To=%2B61255550100",
+        : channel === "attendance"
+          ? "Digits=1&CallSid=CAattendance&From=%2B61255550100&To=%2B61400123456"
+          : "Digits=01&SpeechResult=%E5%BC%A0%E4%B8%89+%2B&From=%2B61400123456&To=%2B61255550100",
     );
-    const target = `${channel === "sms" ? smsPath : voicePath}?turn=5dff64a5-b5cf-4b2a-8dfb-4d97ee349bc0&encoded=%2B+%20&encoded=second`;
+    const target = `/api/webhooks/${channel}?turn=5dff64a5-b5cf-4b2a-8dfb-4d97ee349bc0&encoded=%2B+%20&encoded=second`;
     let seen:
       | { path: string; headers: IncomingMessage["headers"]; body: Buffer }
       | undefined;
@@ -194,7 +197,7 @@ for (const channel of ["voice", "sms"]) {
   });
 }
 
-test("only POST on the literal voice webhook target is forwarded", async (t) => {
+test("only POST on the literal voice and attendance webhook targets is forwarded", async (t) => {
   let upstreamRequests = 0;
   const { port } = await setup(t, (_req, res) => {
     upstreamRequests++;
@@ -205,34 +208,42 @@ test("only POST on the literal voice webhook target is forwarded", async (t) => 
     "/admin",
     "/api/admin/login",
     "/api/bookings",
+    "/api/admin/bookings/123/attendance-call",
     "/api/webhooks/sms",
     "/api/webhooks/email",
     `${voicePath}/`,
     "/api/%77ebhooks/voice",
     "/api/../api/webhooks/voice",
     "http://example.invalid/api/webhooks/voice",
+    `${attendancePath}/`,
+    "/api/%77ebhooks/attendance",
+    "/api/webhooks/%61ttendance",
+    "/api/../api/webhooks/attendance",
+    "http://example.invalid/api/webhooks/attendance",
   ]) {
     assert.equal((await send(port, { path })).status, 404, path);
   }
-  for (const method of ["GET", "PUT", "DELETE", "OPTIONS"]) {
-    const reply = await send(port, { method });
-    assert.equal(reply.status, 405, method);
-    assert.equal(reply.headers.allow, "POST");
+  for (const path of [voicePath, attendancePath]) {
+    for (const method of ["GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+      const reply = await send(port, { path, method });
+      assert.equal(reply.status, 405, `${path} ${method}`);
+      assert.equal(reply.headers.allow, "POST");
+    }
+    for (const value of [undefined, "", "x".repeat(257)]) {
+      const reply = await send(port, {
+        path,
+        headers: { "x-twilio-signature": value },
+      });
+      assert.equal(reply.status, 403, path);
+    }
+    for (const value of [undefined, "application/json", "text/plain"]) {
+      const reply = await send(port, {
+        path,
+        headers: { "content-type": value },
+      });
+      assert.equal(reply.status, 415, path);
+    }
   }
-  assert.equal(
-    (await send(port, { headers: { "x-twilio-signature": undefined } })).status,
-    403,
-  );
-  assert.equal(
-    (await send(port, { headers: { "x-twilio-signature": "x".repeat(257) } }))
-      .status,
-    403,
-  );
-  assert.equal(
-    (await send(port, { headers: { "content-type": "application/json" } }))
-      .status,
-    415,
-  );
   assert.equal(upstreamRequests, 0);
 });
 
@@ -253,6 +264,7 @@ test("SMS opt-in keeps method, signature, content type and literal-path restrict
     "/admin",
     "/api/admin/login",
     "/api/bookings",
+    "/api/admin/bookings/123/attendance-call",
     "/api/webhooks/email",
     `${smsPath}/`,
     "/api/%77ebhooks/sms",
@@ -287,10 +299,10 @@ test("SMS opt-in keeps method, signature, content type and literal-path restrict
     "rejected requests must never reach the app",
   );
 
-  for (const path of [voicePath, smsPath]) {
+  for (const path of [voicePath, attendancePath, smsPath]) {
     assert.equal((await send(port, { path })).status, 200);
   }
-  assert.deepEqual(upstreamPaths, [voicePath, smsPath]);
+  assert.deepEqual(upstreamPaths, [voicePath, attendancePath, smsPath]);
 });
 
 test("declared and chunked oversized request bodies are rejected before contacting the application", async (t) => {
@@ -303,15 +315,19 @@ test("declared and chunked oversized request bodies are rejected before contacti
     },
     { maxBodyBytes: 32 },
   );
-  const declared = await send(port, {
-    headers: { "content-length": 33 },
-    chunks: [Buffer.alloc(33, "a")],
-  });
-  assert.equal(declared.status, 413);
-  const chunked = await send(port, {
-    chunks: [Buffer.alloc(16, "a"), Buffer.alloc(17, "b")],
-  });
-  assert.equal(chunked.status, 413);
+  for (const path of [voicePath, attendancePath]) {
+    const declared = await send(port, {
+      path,
+      headers: { "content-length": 33 },
+      chunks: [Buffer.alloc(33, "a")],
+    });
+    assert.equal(declared.status, 413, path);
+    const chunked = await send(port, {
+      path,
+      chunks: [Buffer.alloc(16, "a"), Buffer.alloc(17, "b")],
+    });
+    assert.equal(chunked.status, 413, path);
+  }
   assert.equal(upstreamRequests, 0);
 });
 
@@ -323,9 +339,11 @@ test("application timeouts return an observable 504 and do not hang the caller",
     },
     { deadlineMs: 60 },
   );
-  const reply = await send(port, { chunks: [Buffer.from("Digits=1")] });
-  assert.equal(reply.status, 504);
-  assert.equal(reply.body.toString(), "Local service timed out");
+  for (const path of [voicePath, attendancePath]) {
+    const reply = await send(port, { path, chunks: [Buffer.from("Digits=1")] });
+    assert.equal(reply.status, 504, path);
+    assert.equal(reply.body.toString(), "Local service timed out");
+  }
 });
 
 test("a stalled incoming body returns 504 rather than resetting before the response is flushed", async (t) => {

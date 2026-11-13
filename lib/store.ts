@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { randomInt, createHash, timingSafeEqual } from "node:crypto";
 import { mkdirSync, chmodSync } from "node:fs";
 import path from "node:path";
+import { attendanceRecipient, type AttendanceCallStatus } from "./attendance";
 import {
   COURTS,
   TIME_ZONE,
@@ -82,6 +83,31 @@ export function getDatabase(): DatabaseSync {
       updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS phone_booking_sms_call ON phone_booking_sms_outbox(call_sid, booking_id);
+    CREATE TABLE IF NOT EXISTS attendance_calls (
+      id TEXT PRIMARY KEY,
+      booking_id TEXT NOT NULL REFERENCES bookings(id),
+      booking_version INTEGER NOT NULL,
+      booking_snapshot TEXT NOT NULL,
+      account_sid TEXT NOT NULL,
+      sender TEXT NOT NULL,
+      recipient TEXT NOT NULL,
+      callback_origin TEXT NOT NULL,
+      submission_status TEXT NOT NULL CHECK (submission_status IN ('pending', 'processing', 'submitted', 'failed', 'unknown')),
+      status TEXT NOT NULL,
+      call_sid TEXT UNIQUE,
+      phase TEXT NOT NULL CHECK (phase IN ('initial', 'attendance', 'confirm', 'done')),
+      turn TEXT,
+      unclear_count INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS attendance_booking ON attendance_calls(booking_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS attendance_call_requests (
+      request_id TEXT PRIMARY KEY,
+      booking_id TEXT NOT NULL,
+      booking_version INTEGER NOT NULL,
+      attempt_id TEXT NOT NULL REFERENCES attendance_calls(id)
+    );
   `);
   return database;
 }
@@ -633,4 +659,302 @@ export function expirePhoneBookingSmsOutbox(id: string, before: number): void {
       "UPDATE phone_booking_sms_outbox SET status = 'unknown', updated_at = ? WHERE id = ? AND status = 'processing' AND updated_at <= ?",
     )
     .run(Date.now(), id, before);
+}
+
+export type AttendanceCall = {
+  id: string;
+  bookingId: string;
+  bookingVersion: number;
+  booking: Booking;
+  accountSid: string;
+  sender: string;
+  recipient: string;
+  callbackOrigin: string;
+  submissionStatus:
+    | "pending"
+    | "processing"
+    | "submitted"
+    | "failed"
+    | "unknown";
+  status: AttendanceCallStatus;
+  callSid: string | null;
+  phase: "initial" | "attendance" | "confirm" | "done";
+  turn: string | null;
+  unclearCount: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+function toAttendanceCall(row: Row): AttendanceCall {
+  return {
+    id: String(row.id),
+    bookingId: String(row.booking_id),
+    bookingVersion: Number(row.booking_version),
+    booking: JSON.parse(String(row.booking_snapshot)) as Booking,
+    accountSid: String(row.account_sid),
+    sender: String(row.sender),
+    recipient: String(row.recipient),
+    callbackOrigin: String(row.callback_origin),
+    submissionStatus:
+      row.submission_status as AttendanceCall["submissionStatus"],
+    status: row.status as AttendanceCallStatus,
+    callSid: row.call_sid === null ? null : String(row.call_sid),
+    phase: row.phase as AttendanceCall["phase"],
+    turn: row.turn === null ? null : String(row.turn),
+    unclearCount: Number(row.unclear_count),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+export function getAttendanceCall(id: string): AttendanceCall | null {
+  const row = getDatabase()
+    .prepare("SELECT * FROM attendance_calls WHERE id = ?")
+    .get(id) as Row | undefined;
+  return row ? toAttendanceCall(row) : null;
+}
+
+export function getAttendanceCallByRequest(
+  requestId: string,
+): AttendanceCall | null {
+  const row = getDatabase()
+    .prepare(
+      "SELECT a.* FROM attendance_calls a JOIN attendance_call_requests r ON r.attempt_id = a.id WHERE r.request_id = ?",
+    )
+    .get(requestId) as Row | undefined;
+  return row ? toAttendanceCall(row) : null;
+}
+
+export function getLatestAttendanceCall(
+  bookingId: string,
+): AttendanceCall | null {
+  const row = getDatabase()
+    .prepare(
+      "SELECT * FROM attendance_calls WHERE booking_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+    )
+    .get(bookingId) as Row | undefined;
+  return row ? toAttendanceCall(row) : null;
+}
+
+export function attendanceBookingMatches(
+  value: AttendanceCall,
+  booking: Booking,
+): boolean {
+  return (
+    booking.status === "confirmed" &&
+    booking.version === value.bookingVersion &&
+    booking.phone === value.booking.phone &&
+    attendanceRecipient(booking.phone) === value.recipient &&
+    booking.startsAt === value.booking.startsAt &&
+    booking.endsAt === value.booking.endsAt &&
+    booking.courtId === value.booking.courtId &&
+    Date.parse(booking.startsAt) > Date.now()
+  );
+}
+
+// Unknown submissions can still ring. A new request must not submit a second
+// call until the first one is known to have finished, including after an edit.
+export function attendanceCallBlocksRetry(value: AttendanceCall): boolean {
+  return (
+    value.submissionStatus === "pending" ||
+    value.submissionStatus === "processing" ||
+    value.submissionStatus === "unknown" ||
+    ["requesting", "queued", "ringing", "in-progress", "unknown"].includes(
+      value.status,
+    )
+  );
+}
+
+export function reserveAttendanceCall(value: {
+  id: string;
+  requestId: string;
+  bookingId: string;
+  bookingVersion: number;
+  accountSid: string;
+  sender: string;
+  callbackOrigin: string;
+}): AttendanceCall {
+  validateVersion(value.bookingVersion);
+  return transaction((db) => {
+    const replay = db
+      .prepare("SELECT * FROM attendance_call_requests WHERE request_id = ?")
+      .get(value.requestId) as Row | undefined;
+    if (replay) {
+      if (
+        replay.booking_id !== value.bookingId ||
+        Number(replay.booking_version) !== value.bookingVersion
+      )
+        throw new AppError("请求编号已用于其他预约，请刷新后重试", 409);
+      return getAttendanceCall(String(replay.attempt_id))!;
+    }
+    const booking = getBooking(value.bookingId, undefined, true);
+    if (booking.version !== value.bookingVersion)
+      throw new AppError("预约已被更新，请刷新后重试", 409);
+    if (
+      booking.status !== "confirmed" ||
+      Date.parse(booking.startsAt) <= Date.now()
+    )
+      throw new AppError("只能致电尚未开始的有效预约", 409);
+    const recipient = attendanceRecipient(booking.phone);
+    if (!recipient)
+      throw new AppError("预约电话无法拨打，请填写国际号码或澳洲手机号码", 400);
+    const latest = getLatestAttendanceCall(booking.id);
+    const existing =
+      latest &&
+      (attendanceCallBlocksRetry(latest) ||
+        (latest.status === "attending" &&
+          latest.bookingVersion === booking.version));
+    const id = existing ? latest.id : value.id;
+    if (!existing) {
+      const now = Date.now();
+      db.prepare(
+        "INSERT INTO attendance_calls (id, booking_id, booking_version, booking_snapshot, account_sid, sender, recipient, callback_origin, submission_status, status, phase, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'requesting', 'initial', ?, ?)",
+      ).run(
+        id,
+        booking.id,
+        booking.version,
+        JSON.stringify(booking),
+        value.accountSid,
+        value.sender,
+        recipient,
+        value.callbackOrigin,
+        now,
+        now,
+      );
+    }
+    db.prepare(
+      "INSERT INTO attendance_call_requests (request_id, booking_id, booking_version, attempt_id) VALUES (?, ?, ?, ?)",
+    ).run(value.requestId, value.bookingId, value.bookingVersion, id);
+    return getAttendanceCall(id)!;
+  });
+}
+
+export function claimAttendanceCall(id: string): boolean {
+  return transaction((db) => {
+    const value = getAttendanceCall(id);
+    if (!value || value.submissionStatus !== "pending") return false;
+    const booking = getBooking(value.bookingId, undefined, true);
+    if (!attendanceBookingMatches(value, booking)) {
+      db.prepare(
+        "UPDATE attendance_calls SET submission_status = 'failed', status = 'stale', phase = 'done', updated_at = ? WHERE id = ?",
+      ).run(Date.now(), id);
+      return false;
+    }
+    return (
+      Number(
+        db
+          .prepare(
+            "UPDATE attendance_calls SET submission_status = 'processing', updated_at = ? WHERE id = ? AND submission_status = 'pending'",
+          )
+          .run(Date.now(), id).changes,
+      ) === 1
+    );
+  });
+}
+
+export function finishAttendanceCallSubmission(
+  id: string,
+  status: "submitted" | "failed" | "unknown",
+  callSid: string | null = null,
+): void {
+  transaction((db) => {
+    const value = getAttendanceCall(id);
+    if (!value) return;
+    // A verified callback is stronger evidence than a late HTTP timeout or
+    // rejection, and may already have recorded the customer's final answer.
+    if (value.callSid) {
+      if (callSid && value.callSid !== callSid) {
+        db.prepare(
+          "UPDATE attendance_calls SET status = 'unknown', phase = 'done', updated_at = ? WHERE id = ?",
+        ).run(Date.now(), id);
+      }
+      return;
+    }
+    if (value.submissionStatus !== "processing") return;
+    db.prepare(
+      "UPDATE attendance_calls SET submission_status = ?, status = ?, call_sid = ?, phase = ?, updated_at = ? WHERE id = ?",
+    ).run(
+      status,
+      status === "submitted" ? "queued" : status,
+      callSid,
+      status === "failed" ? "done" : value.phase,
+      Date.now(),
+      id,
+    );
+  });
+}
+
+export function updateAttendanceCall(
+  id: string,
+  value: Pick<AttendanceCall, "status" | "phase" | "turn" | "unclearCount">,
+): void {
+  getDatabase()
+    .prepare(
+      "UPDATE attendance_calls SET status = ?, phase = ?, turn = ?, unclear_count = ?, updated_at = ? WHERE id = ?",
+    )
+    .run(
+      value.status,
+      value.phase,
+      value.turn,
+      value.unclearCount,
+      Date.now(),
+      id,
+    );
+}
+
+export function expireAttendanceCalls(bookingId: string): void {
+  const now = Date.now();
+  getDatabase()
+    .prepare(
+      "UPDATE attendance_calls SET submission_status = 'unknown', status = 'unknown', updated_at = ? WHERE booking_id = ? AND submission_status = 'processing' AND call_sid IS NULL AND updated_at < ?",
+    )
+    .run(now, bookingId, now - 30_000);
+  getDatabase()
+    .prepare(
+      "UPDATE attendance_calls SET status = 'unknown', phase = 'done', updated_at = ? WHERE booking_id = ? AND status IN ('queued', 'ringing', 'in-progress') AND updated_at < ?",
+    )
+    .run(now, bookingId, now - 30 * 60_000);
+}
+
+// Identity is checked before reading the event cache, so a replay cannot use
+// another call's previously cached result. The first signed callback may bind
+// its SID before the Calls API acknowledgement has arrived.
+export function runAttendanceCallEvent(
+  id: string,
+  eventKey: string,
+  identity: {
+    callSid: string;
+    accountSid: string;
+    sender: string;
+    recipient: string;
+  },
+  operation: (value: AttendanceCall) => string,
+): string {
+  return transaction((db) => {
+    let value = getAttendanceCall(id);
+    if (!value) throw new AppError("找不到电话确认记录", 404);
+    if (
+      identity.accountSid !== value.accountSid ||
+      identity.sender !== value.sender ||
+      identity.recipient !== value.recipient ||
+      !/^CA[a-fA-F0-9]{32}$/.test(identity.callSid) ||
+      (value.callSid !== null && identity.callSid !== value.callSid)
+    )
+      throw new AppError("电话确认身份不匹配", 403);
+    if (!value.callSid) {
+      if (!["processing", "unknown"].includes(value.submissionStatus))
+        throw new AppError("电话确认尚未发出", 409);
+      const used = db
+        .prepare("SELECT id FROM attendance_calls WHERE call_sid = ?")
+        .get(identity.callSid);
+      if (used) throw new AppError("通话编号已被使用", 403);
+      db.prepare(
+        "UPDATE attendance_calls SET call_sid = ?, submission_status = 'submitted', updated_at = ? WHERE id = ? AND call_sid IS NULL",
+      ).run(identity.callSid, Date.now(), id);
+      value = getAttendanceCall(id)!;
+    }
+    return runChannelEvent(`attendance:${id}:${eventKey}`, () =>
+      operation(value!),
+    );
+  });
 }

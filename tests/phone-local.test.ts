@@ -121,14 +121,25 @@ test("valid fake settings pass a non-network check without revealing any values"
       "Phone booking SMS: not configured (TWILIO_ACCOUNT_SID is missing).",
     ),
   );
+  assert.ok(
+    result.output.includes(
+      "Attendance calls: not configured (TWILIO_ACCOUNT_SID is missing; add it to .env.local and restart).",
+    ),
+  );
   assertPrivate(result.output);
 });
 
-test("phone booking SMS is optional and preflight never reveals or uses the account SID", () => {
+test("phone booking SMS and attendance calls are optional and preflight never reveals or uses the account SID", () => {
   const sid = `AC${"a1".repeat(16)}`;
   const configured = check({ TWILIO_ACCOUNT_SID: sid });
   assert.equal(configured.status, 0, configured.output);
   assert.ok(configured.output.includes("Phone booking SMS: configured"));
+  assert.ok(configured.output.includes("Attendance calls: configured"));
+  assert.ok(
+    configured.output.includes(
+      "public callback URL is set when the local tunnel starts",
+    ),
+  );
   assertPrivate(configured.output, [...Object.values(fakeSettings), sid]);
 
   for (const invalid of [
@@ -141,6 +152,11 @@ test("phone booking SMS is optional and preflight never reveals or uses the acco
     assert.ok(
       result.output.includes(
         "Phone booking SMS: not configured (TWILIO_ACCOUNT_SID must be AC followed by 32 hexadecimal characters).",
+      ),
+    );
+    assert.ok(
+      result.output.includes(
+        "Attendance calls: not configured (TWILIO_ACCOUNT_SID must be AC followed by 32 hexadecimal characters).",
       ),
     );
     assertPrivate(result.output, [...Object.values(fakeSettings), invalid]);

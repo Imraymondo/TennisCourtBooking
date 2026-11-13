@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -551,6 +551,39 @@ test("cross-origin writes are rejected without creating a booking", async () => 
   assert.equal(schedule.courts[0].bookings.length, 0);
 });
 
+test("attendance calls require staff authentication and same origin and preserve bookings when unconfigured", async () => {
+  const created = await create(input("2030-03-01T10:00"));
+  const path = `/api/admin/bookings/${created.booking.id}/attendance-call`;
+  const body = { version: created.booking.version, requestId: randomUUID() };
+  assert.equal((await api(path, { body })).response.status, 401);
+  const login = await api("/api/admin/login", {
+    body: { password: adminPassword },
+  });
+  assert.equal(login.response.status, 200);
+  const cookie = login.response.headers.get("set-cookie")!.split(";")[0];
+  assert.equal(
+    (await api(path, { body, cookie, origin: "https://untrusted.example" }))
+      .response.status,
+    403,
+  );
+  assert.equal(
+    (await api(path, { body: { ...body, To: "+61400999999" }, cookie }))
+      .response.status,
+    400,
+  );
+  assert.equal((await api(path, { body, cookie })).response.status, 503);
+  const current = await api<BookingResponse>("/api/bookings/lookup", {
+    body: { id: created.booking.id, accessCode: created.accessCode },
+  });
+  assert.equal(current.body.booking.status, "confirmed");
+  assert.equal(current.body.booking.version, created.booking.version);
+  const listing = await api<{ attendanceCalls: Record<string, unknown> }>(
+    "/api/bookings?date=2030-03-01",
+    { cookie },
+  );
+  assert.deepEqual(listing.body.attendanceCalls, {});
+});
+
 test("unconfigured message providers report disabled channels and reject inbound webhooks without external calls", async () => {
   const status = await api<{
     phone: boolean;
@@ -563,7 +596,7 @@ test("unconfigured message providers report disabled channels and reject inbound
   assert.equal(status.body.sms, false);
   assert.equal(status.body.email, false);
   assert.equal(status.body.configurationOnly, true);
-  for (const channel of ["sms", "voice", "email"]) {
+  for (const channel of ["sms", "voice", "email", "attendance"]) {
     const webhook = await fetch(`${baseUrl}/api/webhooks/${channel}`, {
       method: "POST",
       headers: {

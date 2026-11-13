@@ -1965,6 +1965,42 @@ footer {
   display: flex;
   gap: 13px;
 }
+.admin-attendance-action {
+  min-width: 155px;
+  max-width: 190px;
+  margin-top: 14px;
+}
+.admin-attendance-button {
+  border: 1px solid #9ba98b;
+  border-radius: 4px;
+  padding: 7px 10px;
+  background: #f4f7ec;
+  color: #1d4935;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.admin-attendance-button:hover:not(:disabled) {
+  background: #e7efdc;
+  border-color: #527544;
+}
+.admin-attendance-button:focus-visible {
+  outline: 2px solid #527544;
+  outline-offset: 3px;
+}
+.admin-attendance-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.admin-attendance-status {
+  margin: 7px 0 0;
+  color: #5e6c54;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.admin-attendance-error {
+  color: #9a3d26;
+}
 .admin-text-button {
   padding: 0;
   border: 0;

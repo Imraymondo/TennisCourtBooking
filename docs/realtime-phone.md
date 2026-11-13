@@ -2,7 +2,7 @@
 
 `VOICE_MODE=realtime` 让GPT直接接收电话音频并生成语音回复。Twilio接听真实来电，通过双向Media Stream连接本机音频桥，再与OpenAI Realtime交换音频。预约流程、身份核验、明确确认、时段冲突检查和SQLite写入仍由本机程序控制。它与 `BOOKING_AI_ENABLED` 的Responses API文本理解是两项独立设置。
 
-网站和预约数据库继续运行在自己的电脑，不需要部署服务器、购买域名或公开首页与后台。ngrok的HTTPS隧道同时支持音频WebSocket；公网只允许电话回调、认证后的音频流，以及使用 `sms:local` 时的短信回调。内部预约API不会通过隧道公开。电脑、网络、终端和隧道必须持续运行。
+网站和预约数据库继续运行在自己的电脑，不需要部署服务器、购买域名或公开首页与后台。ngrok的HTTPS隧道同时支持音频WebSocket；公网只允许来电与到场确认的POST回调、认证后的音频流，以及使用 `sms:local` 时的短信回调。内部预约API不会通过隧道公开。电脑、网络、终端和隧道必须持续运行。
 
 ## 1. 准备账号和本机配置
 
@@ -32,6 +32,8 @@ OPENAI_REALTIME_TRANSCRIBE_MODEL=gpt-transcribe
 当前Realtime默认模型为 `gpt-realtime-1.5`，输入转写为 `gpt-transcribe`，转写语言为中文 `zh`。可按账号权限更改各自模型变量；配置通过不代表模型有权限。内置声音可选 `alloy`、`ash`、`ballad`、`coral`、`echo`、`sage`、`shimmer`、`verse`、`marin`、`cedar`，默认 `marin`。
 
 电话预约成功后如需确认短信，在现有 `.env.local` 额外填写Twilio控制台中的 `TWILIO_ACCOUNT_SID`（`AC` 后接32位十六进制字符），复用已有 `TWILIO_AUTH_TOKEN` 和支持SMS的 `TWILIO_PHONE_NUMBER`。不要发送SID或密钥到聊天中。缺少SID或格式不正确时，原电话流程仍可使用，成功后编号和管理码各读一次。
+
+工作人员也可在本机 `/admin` 为未来的有效预约手动发起到场确认电话；它使用独立的Twilio中文提示与回答采集，不连接Realtime或OpenAI，也没有定时自动拨号。外呼需要同一Twilio账号的SID、Auth Token、支持Voice的E.164主叫号码和公网HTTPS `APP_BASE_URL`。已有来电接入却缺SID时，只需补到现有 `.env.local` 并停止、重新启动服务；`phone:local` 自动提供ngrok公网地址，无需购买域名。程序从Twilio号码拨打预约中的客户电话，并自动设置 **POST `/api/webhooks/attendance`**，不修改下文的来电Voice URL。试用账号须按控制台要求验证目标号码，外呼按Twilio账号计费。详见[工作人员到场确认电话](local-phone.md#工作人员发起到场确认电话)。
 
 ## 2. 预检并启动
 

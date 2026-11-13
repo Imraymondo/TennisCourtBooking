@@ -8,6 +8,7 @@ import {
   type FormEvent,
 } from "react";
 import Link from "next/link";
+import type { AttendanceCallSummary } from "@/lib/attendance";
 import {
   COURTS,
   TIME_ZONE,
@@ -22,6 +23,20 @@ const sources: Record<Channel, string> = {
   sms: "短信",
   email: "邮件",
   staff: "工作人员",
+};
+
+const attendanceLabels: Record<AttendanceCallSummary["status"], string> = {
+  requesting: "正在提交拨号请求…",
+  queued: "拨号已排队，等待接通。",
+  ringing: "正在振铃，等待客户接听…",
+  "in-progress": "通话中，等待客户确认到场。",
+  attending: "已确认到场。",
+  cancelled: "到场结果已更新，请刷新预约状态。",
+  unanswered: "未接听，预约保留。",
+  completed: "通话已结束，未确认到场，预约保留。",
+  failed: "拨号失败，预约保留。",
+  unknown: "拨号状态待确认，请勿重复拨打。",
+  stale: "预约已变更，此次电话不再确认当前预约。",
 };
 
 class RequestError extends Error {
@@ -39,7 +54,10 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
     cache: "no-store",
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
-  const data = await response.json().catch(() => ({}));
+  const data = await response.json().catch(() => {
+    if (response.ok) throw new Error("服务器响应不完整，请重试。");
+    return {};
+  });
   if (!response.ok)
     throw new RequestError(
       data.error || "请求失败，请稍后重试。",
@@ -74,6 +92,23 @@ function prettyTime(iso: string) {
   }).format(new Date(iso));
 }
 
+function attendanceStatus(booking: Booking, call?: AttendanceCallSummary) {
+  if (booking.status === "cancelled") {
+    return call?.status === "cancelled"
+      ? "已确认不能到场，预约已取消。"
+      : "预约已取消。";
+  }
+  if (call) {
+    if (call.status === "stale" || call.bookingVersion !== booking.version)
+      return "预约已变更，此次电话不再确认当前预约。";
+    return attendanceLabels[call.status];
+  }
+  if (!booking.phone.trim()) return "未填写电话，无法电话确认。";
+  if (new Date(booking.startsAt).getTime() <= Date.now())
+    return "预约已开始，无法电话确认。";
+  return "拨打客户电话，询问是否按时到场。";
+}
+
 export default function AdminConsole({ initialDate }: { initialDate: string }) {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
@@ -87,6 +122,32 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
   const [editor, setEditor] = useState<{ booking?: Booking } | null>(null);
   const [cancelId, setCancelId] = useState<string | null>(null);
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [attendanceCalls, setAttendanceCalls] = useState<
+    Record<string, AttendanceCallSummary>
+  >({});
+  const [callPending, setCallPending] = useState<Record<string, boolean>>({});
+  const [callIssues, setCallIssues] = useState<Record<string, string>>({});
+  const pendingCalls = useRef(new Set<string>());
+  const callRequests = useRef(
+    new Map<
+      string,
+      { version: number; requestId: string; previousCallId?: string }
+    >(),
+  );
+
+  const expireSession = useCallback(() => {
+    setAuthenticated(false);
+    setBookings([]);
+    setLoadedDate("");
+    setAttendanceCalls({});
+    setCallPending({});
+    setCallIssues({});
+    pendingCalls.current.clear();
+    callRequests.current.clear();
+    setEditor(null);
+    setCancelId(null);
+    setNotice("");
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -111,12 +172,34 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
     let current = true;
     const load = async () => {
       try {
-        const data = await api<{ bookings: Booking[] }>(
-          `/api/bookings?date=${encodeURIComponent(date)}`,
-          { signal: controller.signal },
-        );
+        const data = await api<{
+          bookings: Booking[];
+          attendanceCalls: Record<string, AttendanceCallSummary>;
+        }>(`/api/bookings?date=${encodeURIComponent(date)}`, {
+          signal: controller.signal,
+        });
         if (current) {
           setBookings(data.bookings);
+          const calls = data.attendanceCalls || {};
+          setAttendanceCalls(calls);
+          const resolved: string[] = [];
+          for (const [bookingId, request] of callRequests.current) {
+            const booking = data.bookings.find((item) => item.id === bookingId);
+            const call = calls[bookingId];
+            if (
+              (booking && booking.version !== request.version) ||
+              (call && call.id !== request.previousCallId)
+            ) {
+              callRequests.current.delete(bookingId);
+              resolved.push(bookingId);
+            }
+          }
+          if (resolved.length)
+            setCallIssues((previous) => {
+              const next = { ...previous };
+              for (const bookingId of resolved) delete next[bookingId];
+              return next;
+            });
           setLoadedDate(date);
           setError("");
         }
@@ -124,8 +207,7 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
         if (!current || (err instanceof Error && err.name === "AbortError"))
           return;
         if (err instanceof RequestError && err.status === 401) {
-          setAuthenticated(false);
-          setBookings([]);
+          expireSession();
         }
         setError(err instanceof Error ? err.message : "读取预约失败。");
       }
@@ -139,7 +221,7 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
       controller.abort();
       clearInterval(interval);
     };
-  }, [authenticated, date, refreshKey]);
+  }, [authenticated, date, refreshKey, expireSession]);
 
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -163,10 +245,7 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
     setError("");
     try {
       await api("/api/admin/logout", { method: "POST", body: "{}" });
-      setAuthenticated(false);
-      setBookings([]);
-      setEditor(null);
-      setNotice("");
+      expireSession();
     } catch (err) {
       setError(err instanceof Error ? err.message : "退出失败。");
     }
@@ -194,10 +273,90 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
         setRefreshKey((value) => value + 1);
         setCancelId(null);
       }
-      if (err instanceof RequestError && err.status === 401)
-        setAuthenticated(false);
+      if (err instanceof RequestError && err.status === 401) expireSession();
     } finally {
       setCancelBusy(false);
+    }
+  }
+
+  async function confirmAttendance(booking: Booking) {
+    const call = attendanceCalls[booking.id];
+    if (
+      pendingCalls.current.has(booking.id) ||
+      booking.status !== "confirmed" ||
+      !booking.phone.trim() ||
+      new Date(booking.startsAt).getTime() <= Date.now() ||
+      (call && !call.canRetry)
+    )
+      return;
+
+    pendingCalls.current.add(booking.id);
+    setCallPending((previous) => ({ ...previous, [booking.id]: true }));
+    setCallIssues((previous) => ({ ...previous, [booking.id]: "" }));
+    setError("");
+    setNotice("");
+    try {
+      let request = callRequests.current.get(booking.id);
+      if (!request || request.version !== booking.version) {
+        request = {
+          version: booking.version,
+          requestId: crypto.randomUUID(),
+          previousCallId: call?.id,
+        };
+        callRequests.current.set(booking.id, request);
+      }
+      const data = await api<{ attendanceCall: AttendanceCallSummary }>(
+        `/api/admin/bookings/${encodeURIComponent(booking.id)}/attendance-call`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            version: request.version,
+            requestId: request.requestId,
+          }),
+        },
+      );
+      const result = data.attendanceCall;
+      if (
+        !result ||
+        typeof result.id !== "string" ||
+        !result.id ||
+        result.bookingId !== booking.id ||
+        !Number.isInteger(result.bookingVersion) ||
+        !Object.hasOwn(attendanceLabels, result.status) ||
+        typeof result.canRetry !== "boolean"
+      )
+        throw new Error("拨号请求返回结果不完整。");
+      callRequests.current.delete(booking.id);
+      setAttendanceCalls((previous) => ({
+        ...previous,
+        [booking.id]: result,
+      }));
+      setNotice(`预约 ${booking.id}：拨号请求已提交。`);
+      setRefreshKey((value) => value + 1);
+    } catch (err) {
+      if (err instanceof RequestError && err.status === 401) {
+        expireSession();
+        setError(err.message);
+      } else if (err instanceof RequestError && err.status === 409) {
+        callRequests.current.delete(booking.id);
+        setError(err.message);
+        setRefreshKey((value) => value + 1);
+      } else if (err instanceof RequestError && err.status < 500) {
+        callRequests.current.delete(booking.id);
+        setCallIssues((previous) => ({
+          ...previous,
+          [booking.id]: err.message,
+        }));
+      } else {
+        setCallIssues((previous) => ({
+          ...previous,
+          [booking.id]: "拨号请求结果待确认。可刷新状态或重试同一请求。",
+        }));
+        setRefreshKey((value) => value + 1);
+      }
+    } finally {
+      pendingCalls.current.delete(booking.id);
+      setCallPending((previous) => ({ ...previous, [booking.id]: false }));
     }
   }
 
@@ -366,89 +525,124 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {visibleBookings.map((booking) => (
-                      <tr
-                        key={booking.id}
-                        className={
-                          booking.status === "cancelled"
-                            ? "admin-row-cancelled"
-                            : ""
-                        }
-                      >
-                        <td>
-                          <strong>
-                            {
-                              COURTS.find(
-                                (court) => court.id === booking.courtId,
-                              )?.name
-                            }
-                          </strong>
-                          <small>#{booking.id}</small>
-                        </td>
-                        <td>
-                          {prettyTime(booking.startsAt)}
-                          <small>
-                            至 {prettyTime(booking.endsAt)} ·{" "}
-                            {booking.durationHours} 小时
-                          </small>
-                        </td>
-                        <td>{booking.customerName}</td>
-                        <td>
-                          {booking.phone && <span>{booking.phone}</span>}
-                          {booking.email && <span>{booking.email}</span>}
-                        </td>
-                        <td>
-                          <span>{sources[booking.source]}</span>
-                          <span className={`admin-status ${booking.status}`}>
-                            {booking.status === "confirmed"
-                              ? "已确认"
-                              : "已取消"}
-                          </span>
-                        </td>
-                        <td>
-                          {booking.status === "confirmed" ? (
-                            cancelId === booking.id ? (
-                              <div className="admin-cancel-confirm">
-                                <p>确认取消此预约？</p>
-                                <button
-                                  className="admin-text-button admin-danger"
-                                  disabled={cancelBusy}
-                                  onClick={() => cancel(booking)}
-                                >
-                                  {cancelBusy ? "正在取消…" : "确认取消"}
-                                </button>
-                                <button
-                                  className="admin-text-button"
-                                  disabled={cancelBusy}
-                                  onClick={() => setCancelId(null)}
-                                >
-                                  保留预约
-                                </button>
-                              </div>
+                    {visibleBookings.map((booking) => {
+                      const attendanceCall = attendanceCalls[booking.id];
+                      const isCallPending = Boolean(callPending[booking.id]);
+                      const canCall =
+                        booking.status === "confirmed" &&
+                        Boolean(booking.phone.trim()) &&
+                        new Date(booking.startsAt).getTime() > Date.now() &&
+                        (!attendanceCall || attendanceCall.canRetry);
+                      return (
+                        <tr
+                          key={booking.id}
+                          className={
+                            booking.status === "cancelled"
+                              ? "admin-row-cancelled"
+                              : ""
+                          }
+                        >
+                          <td>
+                            <strong>
+                              {
+                                COURTS.find(
+                                  (court) => court.id === booking.courtId,
+                                )?.name
+                              }
+                            </strong>
+                            <small>#{booking.id}</small>
+                          </td>
+                          <td>
+                            {prettyTime(booking.startsAt)}
+                            <small>
+                              至 {prettyTime(booking.endsAt)} ·{" "}
+                              {booking.durationHours} 小时
+                            </small>
+                          </td>
+                          <td>{booking.customerName}</td>
+                          <td>
+                            {booking.phone && <span>{booking.phone}</span>}
+                            {booking.email && <span>{booking.email}</span>}
+                          </td>
+                          <td>
+                            <span>{sources[booking.source]}</span>
+                            <span className={`admin-status ${booking.status}`}>
+                              {booking.status === "confirmed"
+                                ? "已确认"
+                                : "已取消"}
+                            </span>
+                          </td>
+                          <td>
+                            {booking.status === "confirmed" ? (
+                              cancelId === booking.id ? (
+                                <div className="admin-cancel-confirm">
+                                  <p>确认取消此预约？</p>
+                                  <button
+                                    className="admin-text-button admin-danger"
+                                    disabled={cancelBusy}
+                                    onClick={() => cancel(booking)}
+                                  >
+                                    {cancelBusy ? "正在取消…" : "确认取消"}
+                                  </button>
+                                  <button
+                                    className="admin-text-button"
+                                    disabled={cancelBusy}
+                                    onClick={() => setCancelId(null)}
+                                  >
+                                    保留预约
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="admin-row-actions">
+                                  <button
+                                    className="admin-text-button"
+                                    aria-label={`修改预约 ${booking.id}`}
+                                    onClick={() => setEditor({ booking })}
+                                  >
+                                    修改
+                                  </button>
+                                  <button
+                                    className="admin-text-button admin-danger"
+                                    aria-label={`取消预约 ${booking.id}`}
+                                    onClick={() => setCancelId(booking.id)}
+                                  >
+                                    取消
+                                  </button>
+                                </div>
+                              )
                             ) : (
-                              <div className="admin-row-actions">
-                                <button
-                                  className="admin-text-button"
-                                  aria-label={`修改预约 ${booking.id}`}
-                                  onClick={() => setEditor({ booking })}
-                                >
-                                  修改
-                                </button>
-                                <button
-                                  className="admin-text-button admin-danger"
-                                  aria-label={`取消预约 ${booking.id}`}
-                                  onClick={() => setCancelId(booking.id)}
-                                >
-                                  取消
-                                </button>
-                              </div>
-                            )
-                          ) : (
-                            <span className="admin-muted">已释放时段</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                              <span className="admin-muted">已释放时段</span>
+                            )}
+                            <div className="admin-attendance-action">
+                              <button
+                                type="button"
+                                className="admin-attendance-button"
+                                aria-label={`电话确认到场：${booking.customerName}，预约 ${booking.id}`}
+                                aria-describedby={`attendance-status-${booking.id}`}
+                                disabled={
+                                  !canCall ||
+                                  isCallPending ||
+                                  (cancelBusy && cancelId === booking.id)
+                                }
+                                onClick={() => confirmAttendance(booking)}
+                              >
+                                {isCallPending
+                                  ? "正在请求拨号…"
+                                  : "电话确认到场"}
+                              </button>
+                              <p
+                                id={`attendance-status-${booking.id}`}
+                                className={`admin-attendance-status${callIssues[booking.id] ? " admin-attendance-error" : ""}`}
+                                role="status"
+                              >
+                                {callIssues[booking.id] ||
+                                  attendanceStatus(booking, attendanceCall)}
+                              </p>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -464,10 +658,7 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
               selectedDate={date}
               onClose={() => setEditor(null)}
               onSaved={saved}
-              onExpired={() => {
-                setAuthenticated(false);
-                setEditor(null);
-              }}
+              onExpired={expireSession}
             />
           )}
         </>

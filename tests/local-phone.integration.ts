@@ -220,8 +220,14 @@ async function publicSchedule(dateValue = date): Promise<Availability> {
   return response.json() as Promise<Availability>;
 }
 
-test("the opt-in SMS relay hides website, staff and email routes and both real handlers reject forged signatures", async () => {
-  for (const path of ["/", "/admin", "/api/bookings", "/api/admin/session"]) {
+test("the opt-in SMS relay hides website, staff and email routes and all real handlers reject forged signatures", async () => {
+  for (const path of [
+    "/",
+    "/admin",
+    "/api/bookings",
+    "/api/admin/session",
+    "/api/admin/bookings/123/attendance-call",
+  ]) {
     const response = await fetch(relayUrl + path, {
       signal: AbortSignal.timeout(5_000),
     });
@@ -258,6 +264,20 @@ test("the opt-in SMS relay hides website, staff and email routes and both real h
   );
   assert.equal(forgedSms.response.status, 403);
   assert.equal(forgedSms.response.headers.get("set-cookie"), null);
+  const forgedAttendance = await signedTurn(
+    {
+      path: "/api/webhooks/attendance?attempt=local-forged-test&turn=initial",
+      fields: {
+        CallSid: "CA" + randomUUID().replaceAll("-", ""),
+        From: receivingNumber,
+        To: callingNumber,
+        Direction: "outbound-api",
+      },
+    },
+    false,
+  );
+  assert.equal(forgedAttendance.response.status, 403);
+  assert.equal(forgedAttendance.response.headers.get("set-cookie"), null);
   const email = await fetch(`${relayUrl}/api/webhooks/email`, {
     method: "POST",
     headers: {

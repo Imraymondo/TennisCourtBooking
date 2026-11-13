@@ -8,6 +8,7 @@ import {
   readJson,
 } from "@/lib/http";
 import type { BookingInput } from "@/lib/domain";
+import { getAttendanceSummaries } from "@/lib/channels/attendance";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,10 +16,12 @@ export const dynamic = "force-dynamic";
 export function GET(request: Request) {
   try {
     requireAdmin(request);
+    const bookings = listBookings(
+      new URL(request.url).searchParams.get("date") || undefined,
+    );
     return json({
-      bookings: listBookings(
-        new URL(request.url).searchParams.get("date") || undefined,
-      ),
+      bookings,
+      attendanceCalls: getAttendanceSummaries(bookings),
     });
   } catch (error) {
     return apiError(error);

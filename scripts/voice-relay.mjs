@@ -1,7 +1,8 @@
 import { createServer, request as httpRequest } from "node:http";
 
-// Voice and explicitly enabled SMS callbacks can cross the tunnel. The website
-// and staff endpoints remain local; email is not enabled by this relay.
+// Voice, attendance and explicitly enabled SMS callbacks can cross the tunnel.
+// The website and staff endpoints remain local. The app verifies each callback's
+// signature and channel-specific From/To binding, including outbound attendance.
 /**
  * @param {{ upstreamPort: number, deadlineMs?: number, maxBodyBytes?: number,
  * allowSms?: boolean, realtimeUpgrade?: (request: import('node:http').IncomingMessage,
@@ -49,6 +50,7 @@ export function createVoiceRelay({
       const path = incoming.url?.split("?")[0];
       if (
         path !== "/api/webhooks/voice" &&
+        path !== "/api/webhooks/attendance" &&
         !(allowSms === true && path === "/api/webhooks/sms")
       ) {
         incoming.resume();
