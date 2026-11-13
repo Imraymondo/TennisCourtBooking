@@ -117,8 +117,8 @@ const bookingLanguageStatus = bookingAiEnabled
   ? `Booking language: GPT (model ${bookingAiModel})`
   : "Booking language: rule-based";
 const voiceModeStatus = realtimeEnabled
-  ? `Voice mode: OpenAI Realtime (model ${realtimeModel})`
-  : "Voice mode: Twilio Gather";
+  ? `Voice mode: OpenAI Realtime (model ${realtimeModel}; English transcription en)`
+  : "Voice mode: Twilio Gather (English ASR en-AU; Polly.Olivia-Neural)";
 const accountSid = process.env.TWILIO_ACCOUNT_SID || "";
 const phoneBookingSmsStatus = /^AC[0-9a-fA-F]{32}$/.test(accountSid)
   ? "Phone booking SMS: configured"

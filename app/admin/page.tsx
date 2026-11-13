@@ -3,12 +3,12 @@ import AdminConsole from "./admin-console";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
-  title: "工作人员控制台 | COURTSIDE",
+  title: "Staff console | COURTSIDE",
   robots: { index: false, follow: false },
 };
 
 export default function AdminPage() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
+  const parts = new Intl.DateTimeFormat("en-AU", {
     timeZone: "Australia/Sydney",
     year: "numeric",
     month: "2-digit",

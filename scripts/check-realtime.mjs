@@ -69,7 +69,7 @@ if (
             audio: {
               input: {
                 format: { type: "audio/pcmu" },
-                transcription: { model: transcription, language: "zh" },
+                transcription: { model: transcription, language: "en" },
                 turn_detection: {
                   type: "server_vad",
                   create_response: false,

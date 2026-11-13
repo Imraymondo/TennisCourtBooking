@@ -22,9 +22,9 @@ export async function POST(request: Request) {
         `Bearer ${expected}`,
       )
     )
-      throw new AppError("无效的实时通话凭据", 403);
+      throw new AppError("Invalid Realtime call credentials.", 403);
     if (!realtimeVoiceEnabled())
-      throw new AppError("实时电话渠道尚未配置", 503);
+      throw new AppError("The Realtime phone channel is not configured.", 503);
     const input = parseRealtimeRequest(await readJson(request));
     const result = handleRealtimeRequest(input);
     // handleRealtimeRequest has completed its synchronous transaction. SMS

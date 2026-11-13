@@ -35,7 +35,7 @@ function configuration() {
   try {
     origin = new URL(process.env.APP_BASE_URL || "");
   } catch {
-    throw new AppError("出席确认电话尚未配置公开 HTTPS 地址", 503);
+    throw new AppError("Attendance calls need a public HTTPS address", 503);
   }
   if (
     origin.protocol !== "https:" ||
@@ -46,13 +46,16 @@ function configuration() {
     !["", "/"].includes(origin.pathname) ||
     ["localhost", "127.0.0.1", "[::1]", "0.0.0.0"].includes(origin.hostname)
   )
-    throw new AppError("出席确认电话需要公开 HTTPS origin", 503);
+    throw new AppError("Attendance calls need a public HTTPS origin", 503);
   if (
     !/^AC[a-fA-F0-9]{32}$/.test(accountSid) ||
     !authToken ||
     !/^\+[1-9]\d{7,14}$/.test(sender)
   )
-    throw new AppError("出席确认电话尚未配置 Twilio 拨出号码和凭证", 503);
+    throw new AppError(
+      "Attendance calls need a configured Twilio number and credentials",
+      503,
+    );
   return { accountSid, authToken, sender, callbackOrigin: origin.origin };
 }
 
@@ -240,7 +243,7 @@ export async function startAttendanceCall(
   requestId: string,
 ): Promise<AttendanceCallSummary> {
   if (typeof requestId !== "string" || !UUID.test(requestId))
-    throw new AppError("请求编号无效，请刷新后重试", 400);
+    throw new AppError("Invalid request ID. Refresh and try again", 400);
   const config = configuration();
   expireAttendanceCalls(bookingId);
   const value = reserveAttendanceCall({
@@ -271,7 +274,7 @@ export async function startAttendanceCall(
 }
 
 function say(text: string): string {
-  return `<Say language="cmn-CN" voice="Polly.Zhiyu">${escapeXml(text)}</Say>`;
+  return `<Say language="en-AU" voice="Polly.Olivia-Neural">${escapeXml(text)}</Say>`;
 }
 
 function response(content = ""): string {
@@ -307,10 +310,10 @@ function ask(
   });
   const prompt =
     phase === "attendance"
-      ? `${retry ? "抱歉，没听清。" : `您好，这里是网球场。您预约了${spokenBookingSummary(value.booking)} `}请问您能来吗？能来请按一，或说能来；不能来请按二，或说不能来。`
-      : `${retry ? "抱歉，没听清。" : "您说不能来。"}请确认是否取消这次预约？确认取消请按一，或说确认取消。保留预约请按二。`;
+      ? `${retry ? "I didn't catch that. " : `Hello, this is the tennis court. Your booking is ${spokenBookingSummary(value.booking)} `}Can you attend? Press 1 or say "I can attend". If you cannot attend, press 2 or say "I cannot attend".`
+      : `${retry ? "I didn't catch that. " : "You said you cannot attend. "}Would you like to cancel this booking? To confirm cancellation, press 1 or say "confirm cancellation". To keep your booking, press 2 or say "keep my booking".`;
   return response(
-    `<Gather input="dtmf speech" numDigits="1" language="cmn-Hans-CN" speechTimeout="auto" timeout="5" actionOnEmptyResult="true" method="POST" action="${escapeXml(callbackUrl(value, undefined, turn))}">${say(prompt)}</Gather>${say("没有收到确认，预约已保留。再见。")}<Hangup/>`,
+    `<Gather input="dtmf speech" numDigits="1" language="en-AU" speechTimeout="auto" timeout="5" actionOnEmptyResult="true" method="POST" action="${escapeXml(callbackUrl(value, undefined, turn))}">${say(prompt)}</Gather>${say("No confirmation was received. Your booking has been kept. Goodbye.")}<Hangup/>`,
   );
 }
 
@@ -320,29 +323,31 @@ function speechChoice(
 ): "yes" | "no" | null {
   // A question is not consent, even when its words match a confirmation label.
   if (/[?？]/.test(value)) return null;
-  const text = value.toLowerCase().replace(/[\s，。！？,.!?;；:：“”"'、]/g, "");
+  const text = value
+    .toLowerCase()
+    .replace(/[\s，。！？,.!?;；:：“”"'’、]/g, "");
   if (phase === "confirm") {
     if (
-      /^(确认取消|我确认取消|确认取消预约|我确认取消预约|确定取消|确定取消预约|取消预约|confirmcancel|confirmcancellation)$/.test(
+      /^(确认取消|我确认取消|确认取消预约|我确认取消预约|确定取消|确定取消预约|取消预约|confirmcancel|confirmcancellation|iconfirmcancellation|iconfirmcancel|confirmthecancellation|cancelmybooking|cancelthebooking)$/.test(
         text,
       )
     )
       return "yes";
     if (
-      /^(保留预约|不要取消|不取消|我会来|能来|能到场|我能到场|可以到场|我会到场|keepbooking|donotcancel)$/.test(
+      /^(保留预约|不要取消|不取消|我会来|能来|能到场|我能到场|可以到场|我会到场|keepbooking|keepmybooking|keepthebooking|donotcancel|dontcancel|donotcancelmybooking|dontcancelmybooking|icanattend|iwillattend)$/.test(
         text,
       )
     )
       return "no";
   } else {
     if (
-      /^(能来|可以来|我能来|我会来|会来|能参加|可以参加|我能参加|会参加|能到场|我能到场|可以到场|我会到场|attending|icanattend|yes)$/.test(
+      /^(能来|可以来|我能来|我会来|会来|能参加|可以参加|我能参加|会参加|能到场|我能到场|可以到场|我会到场|attend|attending|icanattend|iwillattend|illattend|icanmakeit|iwillbethere|illbethere|yes)$/.test(
         text,
       )
     )
       return "yes";
     if (
-      /^(不能来|我不能来|来不了|我来不了|不能参加|我不能参加|无法参加|不能到场|我不能到场|cannotattend|icannotattend|cantattend)$/.test(
+      /^(不能来|我不能来|来不了|我来不了|不能参加|我不能参加|无法参加|不能到场|我不能到场|cannotattend|icannotattend|cantattend|icantattend|unabletoattend|imunabletoattend|icannotmakeit|icantmakeit|iwontbethere)$/.test(
         text,
       )
     )
@@ -428,7 +433,7 @@ export function handleAttendanceWebhook(
     [...new Set(query.keys())].some((key) => query.getAll(key).length !== 1) ||
     [...new Set(form.keys())].some((key) => form.getAll(key).length !== 1)
   )
-    throw new AppError("无效的电话确认回调", 400);
+    throw new AppError("Invalid attendance call callback", 400);
   const key =
     event === "status"
       ? `status:${form.get("SequenceNumber") || ""}:${form.get("CallStatus") || ""}`
@@ -446,25 +451,25 @@ export function handleAttendanceWebhook(
       if (event === "status") return statusCallback(value, form);
       if (value.phase === "done")
         return response(
-          `${say("电话确认已结束，请到网站核对预约。再见。")}<Hangup/>`,
+          `${say("This attendance call has ended. Please check your booking on the website. Goodbye.")}<Hangup/>`,
         );
       if (Date.now() - value.createdAt > CALLBACK_LIFETIME_MS)
         return endCall(
           value,
-          "本次电话确认已过期，预约已保留。请到网站核对预约。再见。",
+          "This attendance confirmation has expired. Your booking has been kept. Please check it on the website. Goodbye.",
           "unknown",
         );
       const booking = getBooking(value.bookingId, undefined, true);
       if (!attendanceBookingMatches(value, booking))
         return endCall(
           value,
-          "预约信息已更新，本次电话不会更改预约。请联系工作人员。再见。",
+          "Your booking details have changed. This call will leave the booking unchanged. Please contact staff. Goodbye.",
           "stale",
         );
       if (turn === null) {
         if (value.phase !== "initial")
           return response(
-            `${say("未收到有效确认，预约已保留。再见。")}<Hangup/>`,
+            `${say("No valid confirmation was received. Your booking has been kept. Goodbye.")}<Hangup/>`,
           );
         return ask(value, "attendance");
       }
@@ -473,14 +478,14 @@ export function handleAttendanceWebhook(
         !["attendance", "confirm"].includes(value.phase)
       )
         return response(
-          `${say("未收到有效确认，预约已保留。再见。")}<Hangup/>`,
+          `${say("No valid confirmation was received. Your booking has been kept. Goodbye.")}<Hangup/>`,
         );
       const answer = choice(form, value.phase);
       if (!answer) {
         if (value.unclearCount >= 1)
           return endCall(
             value,
-            "没能确认您的意思，预约已保留。您可以联系工作人员。再见。",
+            "I couldn't confirm your answer. Your booking has been kept. Please contact staff if you need help. Goodbye.",
             "completed",
           );
         return ask(value, value.phase as "attendance" | "confirm", true);
@@ -489,19 +494,23 @@ export function handleAttendanceWebhook(
         if (answer === "yes")
           return endCall(
             value,
-            "好的，已记下您会来，预约保留。期待见到您。再见。",
+            "Thank you. Your attendance is confirmed and your booking has been kept. We look forward to seeing you. Goodbye.",
             "attending",
           );
         return ask(value, "confirm");
       }
       if (answer === "no")
-        return endCall(value, "好的，您的预约已保留。再见。", "completed");
+        return endCall(
+          value,
+          "Your booking has been kept. Goodbye.",
+          "completed",
+        );
       // The event transaction also contains this optimistic cancellation and its
       // saved XML. Retries cannot cancel twice or affect a later booking version.
       cancelBooking(value.bookingId, value.bookingVersion, undefined, true);
       return endCall(
         value,
-        "已为您取消这次预约，球场时段已释放。谢谢通知，再见。",
+        "Your booking has been cancelled and the court is now available. Thank you for letting us know. Goodbye.",
         "cancelled",
       );
     },

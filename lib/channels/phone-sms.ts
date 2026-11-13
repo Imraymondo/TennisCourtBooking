@@ -11,9 +11,10 @@ import {
 } from "../store";
 import { spokenAccessCode, spokenBookingSummary } from "./voice-speech";
 
-export const PHONE_SMS_PENDING_PROMPT = "预约成功，详情短信正在发送。";
+export const PHONE_SMS_PENDING_PROMPT =
+  "Booking confirmed. Your confirmation SMS is being sent.";
 export function phoneSmsPendingPrompt(bookingId: string): string {
-  return `${PHONE_SMS_PENDING_PROMPT}预约编号：${bookingId}。`;
+  return `${PHONE_SMS_PENDING_PROMPT}Booking reference: ${bookingId}.`;
 }
 const REQUEST_TIMEOUT_MS = 4_000;
 const PROCESSING_EXPIRY_MS = 30_000;
@@ -59,7 +60,7 @@ function smsDate(value: string) {
 
 function receipt(booking: Booking, accessCode: string) {
   const court = COURTS.find((value) => value.id === booking.courtId)!.name;
-  return `预约成功。姓名：${booking.customerName}。${court}，悉尼时间${smsDate(booking.startsAt)}至${smsDate(booking.endsAt)}，共${booking.durationHours}小时。预约编号：${booking.id}。管理码：${accessCode}。请妥善保管。`;
+  return `Booking confirmed. Name: ${booking.customerName}. ${court}, ${smsDate(booking.startsAt)} to ${smsDate(booking.endsAt)} Sydney time, ${booking.durationHours} ${booking.durationHours === 1 ? "hour" : "hours"}. Booking reference: ${booking.id}. Access code: ${accessCode}. Keep these details safe.`;
 }
 
 export function queuePhoneBookingSms(
@@ -201,8 +202,10 @@ async function processPending(value: PhoneBookingSmsOutbox) {
 
 function fallback(value: PhoneBookingSmsOutbox) {
   const status =
-    value.status === "failed" ? "短信暂时发送不了" : "短信发送状态未确认";
-  return `预约成功，${status}。${spokenBookingSummary(value.booking, new Date(value.createdAt))}预约编号：${spokenAccessCode(value.booking.id)}。管理码：${spokenAccessCode(value.accessCode)}。请妥善保管。`;
+    value.status === "failed"
+      ? "the SMS could not be sent"
+      : "SMS delivery is unconfirmed";
+  return `Booking confirmed; ${status}. ${spokenBookingSummary(value.booking, new Date(value.createdAt))} Booking reference: ${spokenAccessCode(value.booking.id)}. Access code: ${spokenAccessCode(value.accessCode)}. Keep these details safe.`;
 }
 
 function xmlEscape(value: string) {
@@ -221,10 +224,13 @@ export async function finalizePhoneBookingSms(
   speech: string,
 ): Promise<string> {
   if (!speech.includes(PHONE_SMS_PENDING_PROMPT)) return speech;
-  const match = /预约成功，详情短信正在发送。预约编号：(\d{8})。/.exec(speech);
+  const match =
+    /Booking confirmed\. Your confirmation SMS is being sent\.Booking reference: (\d{8})\./.exec(
+      speech,
+    );
   const pendingPrompt = match?.[0] || PHONE_SMS_PENDING_PROMPT;
   const bookingId = match?.[1];
-  let replacement = "预约成功，短信发送状态未确认。";
+  let replacement = "Booking confirmed; SMS delivery is unconfirmed.";
   try {
     // A cached response must remain bound to its booking even if the same call
     // creates another booking later. A bare marker never selects another task.

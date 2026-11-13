@@ -120,13 +120,13 @@ test("SMS conflict and invalid management code cannot alter an existing booking"
   const conflict = await (
     await sms(signedRequest(url, smsFields("BOOK 1 2099-12-01 11:00 Bob")))
   ).text();
-  assert.match(conflict, /已被预约/);
+  assert.match(conflict, /That time slot is already booked\./);
   const failed = await (
     await sms(
       signedRequest(url, smsFields(`取消 ${listBookings()[0].id} 0000000000`)),
     )
   ).text();
-  assert.match(failed, /不正确/);
+  assert.match(failed, /Incorrect booking number or access code\./);
   assert.equal(
     listBookings().filter((item) => item.status === "confirmed").length,
     1,
@@ -194,23 +194,26 @@ test("guided phone query, booking, view, modification and cancellation use short
     url = action.replaceAll("&amp;", "&");
     return { xml, requestUrl, fields };
   };
-  assert.match((await send()).xml, /您好/);
+  assert.match((await send()).xml, /Hello\./);
   await send("1");
-  assert.match((await send("20991201")).xml, /几个小时/);
+  assert.match((await send("20991201")).xml, /How many hours/);
   const availability = await send("2");
-  assert.match(availability.xml, /可开始时间/);
-  assert.match(availability.xml, /1号场/);
-  assert.match(availability.xml, /2号场/);
-  assert.match((await send("2")).xml, /哪一天/);
-  assert.match((await send("20991201")).xml, /几点开始/);
+  assert.match(availability.xml, /Available start times/);
+  assert.match(availability.xml, /Court 1/);
+  assert.match(availability.xml, /Court 2/);
+  assert.match((await send("2")).xml, /Which date/);
+  assert.match(
+    (await send("20991201")).xml,
+    /What time would you like to start/,
+  );
   await send("23");
   await send("2");
   const contact = await send("", "李四");
-  assert.match(contact.xml, /联系电话/);
+  assert.match(contact.xml, /contact number/i);
   assert.equal(listBookings().length, 0);
   const confirmation = await send("1");
-  assert.match(confirmation.xml, /预约人李四/);
-  assert.doesNotMatch(confirmation.xml, /姓名会公开显示/);
+  assert.match(confirmation.xml, /Booking name: 李四/);
+  assert.doesNotMatch(confirmation.xml, /name will appear publicly/);
   assert.equal(listBookings().length, 0);
   const committed = await send("1");
   assert.equal(listBookings().length, 1);
@@ -225,13 +228,16 @@ test("guided phone query, booking, view, modification and cancellation use short
   assert.equal(listBookings()[0].customerName, "李四");
   await send("5");
   await send(id);
-  assert.match((await send(rawCode!)).xml, /预约已确认/);
+  assert.match((await send(rawCode!)).xml, /This booking is confirmed\./);
   await send("3");
   await send(id);
   await send(rawCode!);
-  assert.match((await send("20991202")).xml, /几点开始/);
+  assert.match(
+    (await send("20991202")).xml,
+    /What time would you like to start/,
+  );
   await send("12");
-  assert.match((await send("3")).xml, /修改为/);
+  assert.match((await send("3")).xml, /Change the booking to:/);
   assert.equal(listBookings()[0].version, 1);
   await send("1");
   assert.equal(listBookings()[0].version, 2);
@@ -240,7 +246,7 @@ test("guided phone query, booking, view, modification and cancellation use short
   await send("4");
   await send(id);
   const cancelPrompt = await send(rawCode!);
-  assert.match(cancelPrompt.xml, /确认取消/);
+  assert.match(cancelPrompt.xml, /confirm cancellation/);
   assert.equal(listBookings()[0].status, "confirmed");
   await send("1");
   assert.equal(listBookings()[0].status, "cancelled");

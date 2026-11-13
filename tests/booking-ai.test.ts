@@ -16,7 +16,8 @@ const original = Object.fromEntries(
 );
 const fakeKey = "test-only-openai-key-never-valid";
 const context: BookingAIContext = { channel: "phone", step: "menu" };
-const utterance = "给我留明天傍晚六点的一号场，打三个小时，我叫张三";
+const utterance =
+  "Book a court tomorrow at 6 pm for three hours. My name is Alice.";
 const interpretation: BookingInterpretation = {
   scope: "booking",
   action: "book",
@@ -24,7 +25,7 @@ const interpretation: BookingInterpretation = {
   court: 1,
   hour: "18",
   duration: 3,
-  name: "张三",
+  name: "Alice",
   correction: null,
 };
 
@@ -140,6 +141,11 @@ test("GPT uses the official Responses endpoint, bounded strict schema, server cr
   assert.ok(call.options.signal);
   assert.equal(call.body.model, "gpt-4.1-mini");
   assert.equal(call.body.store, false);
+  assert.match(
+    call.body.instructions as string,
+    /English is the default customer language/,
+  );
+  assert.doesNotMatch(call.body.instructions as string, /[\p{Script=Han}]/u);
   assert.equal(call.body.max_output_tokens, 650);
   assert.equal(
     call.body.tools,
@@ -197,6 +203,10 @@ test("disabled, missing-key, invalid model and sensitive turns never contact a p
       null,
     );
   for (const text of [
+    "My phone number is +61400123456",
+    "Access code 0123456789",
+    "Booking reference 12345678",
+    "My contact number is zero four one two three four five six seven eight",
     "我的电话+61400123456",
     "管理码是1234567890",
     "预约编号12345678",

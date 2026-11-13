@@ -19,7 +19,7 @@ function run(key = fakeKey, mode = "accepted", model = "gpt-realtime-1.5") {
       send(raw) {
         const data = JSON.parse(raw);
         const s = data.session;
-        if (data.type !== 'session.update' || s.type !== 'realtime' || s.audio.input.format.type !== 'audio/pcmu' || s.audio.output.format.type !== 'audio/pcmu' || s.audio.input.turn_detection.create_response !== false || s.tools.length) throw new Error('Unexpected audio-session request');
+        if (data.type !== 'session.update' || s.type !== 'realtime' || s.audio.input.format.type !== 'audio/pcmu' || s.audio.output.format.type !== 'audio/pcmu' || s.audio.input.transcription.language !== 'en' || s.audio.input.transcription.model !== 'gpt-transcribe' || s.audio.output.voice !== 'marin' || s.audio.input.turn_detection.create_response !== false || s.tools.length) throw new Error('Unexpected audio-session request');
         queueMicrotask(() => {
           ${mode === "http_error" ? "this.emit('unexpected-response', {}, {statusCode:401,resume(){}});" : mode === "rejected" ? `this.emit('message', Buffer.from(JSON.stringify({type:'error',error:{message:'${fakeKey}'}})));` : "this.emit('message', Buffer.from(JSON.stringify({type:'session.updated'})));"}
         });

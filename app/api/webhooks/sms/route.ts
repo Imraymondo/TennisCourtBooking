@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     const form = await verifiedTwilioForm(request);
     const messageId = form.get("MessageSid");
     if (!messageId || !/^[A-Za-z0-9]{10,64}$/.test(messageId))
-      throw new AppError("缺少短信事件编号", 400);
+      throw new AppError("Missing SMS event ID.", 400);
     const reply = await handleTextMessage(
       form.get("Body") || "",
       {

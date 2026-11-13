@@ -180,6 +180,14 @@ test("duration uses the two-hour default and rejects fractional, zero, excessive
   assert.equal(parseDurationSpeech("两小时或者三小时"), null);
 });
 
+test("an English name leaves Chinese schedule fields and their validation intact", () => {
+  assert.equal(parseHourSpeech("下午三点，我叫O'Neil"), "15");
+  assert.equal(parseDurationSpeech("两个小时，我叫O'Neil"), 2);
+  assert.equal(parseHourSpeech("下午三点二分，我叫O'Neil"), null);
+  assert.equal(parseHourSpeech("下午三点到五点，我叫O'Neil"), null);
+  assert.equal(parseDurationSpeech("九个小时，我叫O'Neil"), null);
+});
+
 test("contact capture accepts spoken digits and explicit use of caller ID without inventing a number", () => {
   assert.equal(
     parsePhoneSpeech("联系电话是零四一二三四五六七八"),

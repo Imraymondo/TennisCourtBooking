@@ -339,35 +339,41 @@ test("signed speech crosses the real relay and production app, requires confirma
     path = callback.pathname + callback.search;
     return { ...result, turn };
   };
-  assert.match((await speak()).text, /您好，想预约球场还是查空档/);
-  const requested = await speak("我要预定网球场");
-  assert.match(requested.text, /哪一天/);
-  assert.doesNotMatch(requested.text, /您好，想预约球场还是查空档/);
-  const timeQuestion = await speak("2099年12月1日");
-  assert.match(timeQuestion.text, /几点开始/);
-  assert.doesNotMatch(timeQuestion.text, /想订一号场|选择.*球场/);
-  assert.match((await speak("下午三点")).text, /几个小时/);
-  const nameQuestion = await speak("默认");
-  assert.match(nameQuestion.text, /预约人叫什么名字/);
-  assert.match(nameQuestion.text, /姓名会公开显示/);
-  assert.match((await speak("我叫张三")).text, /联系电话/);
-  const confirm = await speak("使用来电号码");
-  assert.match(confirm.text, /确认请说确认预约/);
-  assert.match(confirm.text, /1号场/);
-  assert.doesNotMatch(confirm.text, /姓名会公开显示/);
+  assert.match(
+    (await speak()).text,
+    /Hello.*book a court.*check availability/i,
+  );
+  const requested = await speak("I would like to book a tennis court");
+  assert.match(requested.text, /which date/i);
+  assert.doesNotMatch(
+    requested.text,
+    /Hello.*book a court.*check availability/i,
+  );
+  const timeQuestion = await speak("1 December 2099");
+  assert.match(timeQuestion.text, /what time.*start/i);
+  assert.doesNotMatch(timeQuestion.text, /which court|choose.*court/i);
+  assert.match((await speak("three pm")).text, /how many hours/i);
+  const nameQuestion = await speak("default");
+  assert.match(nameQuestion.text, /booking name/i);
+  assert.match(nameQuestion.text, /name will appear publicly/i);
+  assert.match((await speak("My name is John Smith")).text, /contact number/i);
+  const confirm = await speak("use my calling number");
+  assert.match(confirm.text, /say confirm booking/i);
+  assert.match(confirm.text, /Court 1/);
+  assert.doesNotMatch(confirm.text, /name will appear publicly/i);
   assert.equal(
     (await publicSchedule()).courts.flatMap((court) => court.bookings).length,
     0,
     "gathering details must not reserve a court before explicit confirmation",
   );
 
-  const committed = await speak("确认预定");
-  assert.match(committed.text, /预约成功/);
+  const committed = await speak("confirm booking");
+  assert.match(committed.text, /Booking confirmed/i);
   const schedule = await publicSchedule();
   const bookings = schedule.courts.flatMap((court) => court.bookings);
   assert.equal(bookings.length, 1);
   const booking = bookings[0];
-  assert.equal(booking.customerName, "张三");
+  assert.equal(booking.customerName, "John Smith");
   assert.equal(booking.courtId, 1);
   assert.equal(
     Date.parse(booking.endsAt) - Date.parse(booking.startsAt),
@@ -418,7 +424,7 @@ test("signed speech crosses the real relay and production app, requires confirma
   assert.equal(privateBooking.source, "phone");
   assert.equal(privateBooking.phone, callingNumber);
   assert.equal(privateBooking.durationHours, 2);
-  assert.equal(privateBooking.customerName, "张三");
+  assert.equal(privateBooking.customerName, "John Smith");
 });
 
 test("signed SMS crosses the opt-in relay and shared production database for query, booking, modification and cancellation", async () => {
@@ -519,7 +525,7 @@ test("signed SMS crosses the opt-in relay and shared production database for que
   assert.equal(privateBooking.version, 1);
 
   const conflict = await sms("预订 2 2099-12-02 00:00 王五");
-  assert.match(conflict.text, /已被预约/);
+  assert.match(conflict.text, /That time slot is already booked/);
   assert.equal(
     (await publicSchedule("2099-12-02")).courts[1].bookings.filter(
       (entry) => entry.id === id,

@@ -507,15 +507,17 @@ test("only a second explicit confirmation cancels once and releases the booked c
     false,
   );
   const initial = call.say();
-  assert.match(initial, /<Gather\b/);
+  assert.match(initial, /<Gather\b[^>]*language="en-AU"/);
+  assert.match(initial, /<Say language="en-AU" voice="Polly.Olivia-Neural">/);
+  assert.match(initial, /Can you attend\?/);
   assert.ok(
     !initial.includes(call.accessCode),
     "attendance call never discloses booking management credentials",
   );
-  const confirmQuestion = call.say("我不能来");
+  const confirmQuestion = call.say("I cannot attend");
   assert.match(confirmQuestion, /<Gather\b/);
   assert.equal(call.storedBooking().status, "confirmed");
-  const confirm = call.prepare("确认取消");
+  const confirm = call.prepare("Confirm cancellation");
   const xml = confirm();
   assert.equal(call.storedBooking().status, "cancelled");
   assert.equal(call.storedBooking().version, 2);
@@ -550,13 +552,55 @@ test("DTMF 1 in the attendance question marks attending and completion cannot ca
   assert.equal(call.storedBooking().status, "confirmed");
 });
 
-for (const speech of ["能到场", "我能到场", "可以到场"]) {
+for (const speech of [
+  "I can attend",
+  "I will attend",
+  "I’ll be there",
+  "attending",
+  "能到场",
+  "我能到场",
+  "可以到场",
+]) {
   test(`explicit attendance ${JSON.stringify(speech)} preserves the booking and marks attending`, async (t) => {
     const call = await conversation(t);
     call.say();
     call.say(speech);
     assert.equal(call.storedCall().status, "attending");
     assert.equal(call.storedBooking().status, "confirmed");
+    assert.equal(call.storedBooking().version, 1);
+  });
+}
+
+for (const speech of [
+  "I cannot attend",
+  "I can't attend",
+  "I can’t make it",
+  "unable to attend",
+]) {
+  test(`English non-attendance ${JSON.stringify(speech)} requires a separate confirmation`, async (t) => {
+    const call = await conversation(t);
+    call.say();
+    const review = call.say(speech);
+    assert.match(review, /Would you like to cancel this booking/);
+    assert.equal(call.storedBooking().status, "confirmed");
+    call.say("Confirm cancellation");
+    assert.equal(call.storedBooking().status, "cancelled");
+    assert.equal(call.storedBooking().version, 2);
+  });
+}
+
+for (const speech of [
+  "Keep my booking",
+  "Don't cancel",
+  "Do not cancel my booking",
+]) {
+  test(`English refusal ${JSON.stringify(speech)} keeps the booking`, async (t) => {
+    const call = await conversation(t);
+    call.say();
+    call.say("I cannot attend");
+    call.say(speech);
+    assert.equal(call.storedBooking().status, "confirmed");
+    assert.equal(call.storedCall().phase, "done");
     assert.equal(call.storedBooking().version, 1);
   });
 }
@@ -593,6 +637,11 @@ for (const speech of [
   "可能来不了",
   "不要取消预约",
   "no",
+  "I cannot not attend",
+  "I can attend but do not cancel",
+  "Can I attend",
+  "I might attend",
+  "I cannot attend?",
   "",
 ]) {
   test(`attendance answer ${JSON.stringify(speech)} preserves the booking`, async (t) => {
@@ -610,6 +659,11 @@ for (const speech of [
   "我不想取消",
   "可能取消",
   "确认取消但我还没决定",
+  "Do not confirm cancellation",
+  "I do not want to cancel",
+  "Maybe cancel",
+  "Confirm cancellation but I have not decided",
+  "Can you confirm cancellation",
   "",
 ]) {
   test(`second-stage ambiguity ${JSON.stringify(speech)} never cancels`, async (t) => {
@@ -622,7 +676,12 @@ for (const speech of [
   });
 }
 
-for (const speech of ["确认取消？", "取消预约？"]) {
+for (const speech of [
+  "Confirm cancellation?",
+  "Cancel my booking?",
+  "确认取消？",
+  "取消预约？",
+]) {
   test(`a cancellation question ${JSON.stringify(speech)} requires a subsequent clear confirmation`, async (t) => {
     const call = await conversation(t);
     call.say();
@@ -647,10 +706,10 @@ test("keeping the reservation at the second question leaves it booked", async (t
 });
 
 const unclearConfirmations: Record<string, string>[] = [
-  { SpeechResult: "确认取消", Confidence: "0.4" },
-  { SpeechResult: "确认取消", Confidence: "invalid" },
-  { SpeechResult: "不要取消", Digits: "1" },
-  { SpeechResult: "确认取消", Digits: "2" },
+  { SpeechResult: "Confirm cancellation", Confidence: "0.4" },
+  { SpeechResult: "Confirm cancellation", Confidence: "invalid" },
+  { SpeechResult: "Do not cancel", Digits: "1" },
+  { SpeechResult: "Confirm cancellation", Digits: "2" },
   { Digits: "11" },
 ];
 for (const extra of unclearConfirmations) {

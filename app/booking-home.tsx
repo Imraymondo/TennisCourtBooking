@@ -80,7 +80,7 @@ function CourtArt() {
   );
 }
 function dateParts(value: string) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
+  const parts = new Intl.DateTimeFormat("en-AU", {
     timeZone: TIME_ZONE,
     year: "numeric",
     month: "2-digit",
@@ -96,15 +96,18 @@ function dateParts(value: string) {
     time: `${pick("hour")}:${pick("minute")}`,
   };
 }
+function hoursLabel(hours: number) {
+  return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+}
 function range(startsAt: string, endsAt: string) {
   const start = dateParts(startsAt),
     end = dateParts(endsAt);
-  return `${start.time} – ${end.time}${end.date !== start.date ? `（${end.date.slice(5)}）` : ""}`;
+  return `${start.time} – ${end.time}${end.date !== start.date ? ` (${dayLabel(end.date)})` : ""}`;
 }
 function dayLabel(value: string, full = false) {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat("en-AU", {
     timeZone: "UTC",
-    month: full ? "long" : "numeric",
+    month: full ? "long" : "short",
     day: "numeric",
     weekday: "short",
   }).format(new Date(`${value}T12:00:00Z`));
@@ -115,10 +118,11 @@ async function api<T>(url: string, options?: RequestInit): Promise<T> {
     ...options,
     headers: { "Content-Type": "application/json", ...options?.headers },
   });
-  const body = await response
-    .json()
-    .catch(() => ({ error: "服务暂时无法响应，请稍后重试。" }));
-  if (!response.ok) throw new Error(body.error || "操作失败，请重试。");
+  const body = await response.json().catch(() => ({
+    error: "The service is temporarily unavailable. Please try again later.",
+  }));
+  if (!response.ok)
+    throw new Error(body.error || "The action failed. Please try again.");
   return body as T;
 }
 
@@ -163,7 +167,7 @@ export default function BookingHome({ today }: { today: string }) {
         setAvailability(data);
         setLoadError("");
         setUpdated(
-          new Intl.DateTimeFormat("zh-CN", {
+          new Intl.DateTimeFormat("en-AU", {
             timeZone: TIME_ZONE,
             hour: "2-digit",
             minute: "2-digit",
@@ -174,7 +178,9 @@ export default function BookingHome({ today }: { today: string }) {
       } catch (error) {
         if (active && !controller.signal.aborted)
           setLoadError(
-            error instanceof Error ? error.message : "无法加载场地，请重试。",
+            error instanceof Error
+              ? error.message
+              : "Unable to load court availability. Please try again.",
           );
       } finally {
         if (active) setLoading(false);
@@ -245,7 +251,7 @@ export default function BookingHome({ today }: { today: string }) {
     setManaged(null);
     setNotice(
       bookingDuration < duration
-        ? `该时段只有 ${slot.maxDurationHours} 小时连续空闲，已为你选择 ${bookingDuration} 小时；当前选择的 ${duration} 小时无法连续安排。请确认时长后提交预约。`
+        ? `This start time has ${hoursLabel(slot.maxDurationHours)} available in a row, so we selected ${hoursLabel(bookingDuration)}. Your requested ${hoursLabel(duration)} is unavailable. Please check the duration before booking.`
         : "",
     );
     setCancelConfirm(false);
@@ -277,7 +283,7 @@ export default function BookingHome({ today }: { today: string }) {
     event.preventDefault();
     if (busy) return;
     if (!editor.phone.trim() && !editor.email.trim()) {
-      setError("请至少填写电话号码或邮箱中的一项。");
+      setError("Please enter a phone number or email address.");
       return;
     }
     setBusy(true);
@@ -291,7 +297,11 @@ export default function BookingHome({ today }: { today: string }) {
       setNotice("");
       refreshAvailability();
     } catch (error) {
-      setError(error instanceof Error ? error.message : "预订未完成，请重试。");
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Your booking was not completed. Please try again.",
+      );
       refreshAvailability();
     } finally {
       setBusy(false);
@@ -314,7 +324,9 @@ export default function BookingHome({ today }: { today: string }) {
       });
       editBooking(booking);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "无法查询预约。");
+      setError(
+        error instanceof Error ? error.message : "Unable to find your booking.",
+      );
     } finally {
       setBusy(false);
     }
@@ -323,7 +335,7 @@ export default function BookingHome({ today }: { today: string }) {
     event.preventDefault();
     if (!managed || busy) return;
     if (!editor.phone.trim() && !editor.email.trim()) {
-      setError("请至少填写电话号码或邮箱中的一项。");
+      setError("Please enter a phone number or email address.");
       return;
     }
     setBusy(true);
@@ -342,11 +354,13 @@ export default function BookingHome({ today }: { today: string }) {
         },
       );
       editBooking(booking);
-      setNotice("预约已修改，场地日程已更新。");
+      setNotice(
+        "Your booking has been changed and the court schedule is up to date.",
+      );
       refreshAvailability();
     } catch (error) {
       setError(
-        `${error instanceof Error ? error.message : "修改失败。"} 如预约已被其他渠道修改，请关闭窗口后重新查询最新预约。`,
+        `${error instanceof Error ? error.message : "Unable to save changes."} If your booking was changed through another channel, close this window and look it up again to get the latest details.`,
       );
       refreshAvailability();
     } finally {
@@ -371,11 +385,15 @@ export default function BookingHome({ today }: { today: string }) {
       );
       editBooking(booking);
       setCancelConfirm(false);
-      setNotice("预约已取消，原时段已重新开放。");
+      setNotice(
+        "Your booking has been cancelled and the time is available again.",
+      );
       refreshAvailability();
     } catch (error) {
       setError(
-        error instanceof Error ? error.message : "取消失败，请重新查询后重试。",
+        error instanceof Error
+          ? error.message
+          : "Unable to cancel. Please look up your booking again and retry.",
       );
     } finally {
       setBusy(false);
@@ -386,9 +404,9 @@ export default function BookingHome({ today }: { today: string }) {
       <>
         <div className="form-row">
           <label>
-            场地
+            Court
             <select
-              aria-label="场地"
+              aria-label="Court"
               value={editor.courtId}
               onChange={(event) => {
                 setEditor({ ...editor, courtId: Number(event.target.value) });
@@ -403,9 +421,9 @@ export default function BookingHome({ today }: { today: string }) {
             </select>
           </label>
           <label>
-            预约时长
+            Booking duration
             <select
-              aria-label="预约时长"
+              aria-label="Booking duration"
               value={editor.durationHours}
               onChange={(event) =>
                 setEditor({
@@ -420,23 +438,26 @@ export default function BookingHome({ today }: { today: string }) {
                   value={i + 1}
                   disabled={!!editorSlot && i + 1 > editorSlot.maxDurationHours}
                 >
-                  {i + 1} 小时
+                  {hoursLabel(i + 1)}
                 </option>
               ))}
             </select>
             {editorSlot && (
               <span className="field-hint">
-                该开始时间最多可连续预约 {editorSlot.maxDurationHours} 小时
+                Up to {hoursLabel(editorSlot.maxDurationHours)} available from
+                this start time
               </span>
             )}
           </label>
         </div>
         <label>
-          开始时间
-          <span className="field-hint">悉尼时间 · 整点开始，可跨午夜</span>
+          Start time
+          <span className="field-hint">
+            Sydney time · Start on the hour; bookings can cross midnight
+          </span>
           <input
             type="datetime-local"
-            aria-label="开始时间"
+            aria-label="Start time"
             step="3600"
             min={`${today}T00:00`}
             value={editor.startLocal}
@@ -448,7 +469,7 @@ export default function BookingHome({ today }: { today: string }) {
           />
         </label>
         <label>
-          预约人姓名
+          Your name
           <input
             autoComplete="name"
             value={editor.customerName}
@@ -456,13 +477,13 @@ export default function BookingHome({ today }: { today: string }) {
             onChange={(event) =>
               setEditor({ ...editor, customerName: event.target.value })
             }
-            placeholder="请输入真实姓名"
+            placeholder="Enter your full name"
             required
           />
         </label>
         <div className="form-row">
           <label>
-            电话号码
+            Phone number
             <input
               type="tel"
               autoComplete="tel"
@@ -471,11 +492,11 @@ export default function BookingHome({ today }: { today: string }) {
               onChange={(event) =>
                 setEditor({ ...editor, phone: event.target.value })
               }
-              placeholder="例如 +61 412 345 678"
+              placeholder="e.g. +61 412 345 678"
             />
           </label>
           <label>
-            邮箱
+            Email
             <input
               type="email"
               autoComplete="email"
@@ -489,7 +510,9 @@ export default function BookingHome({ today }: { today: string }) {
           </label>
         </div>
         <p className="privacy-note">
-          电话与邮箱至少填写一项，仅本人凭管理码及已登录工作人员可见。预约人姓名将公开显示在球场日程上。
+          Enter a phone number or email address. These are visible only to you
+          with your access code and to signed-in staff. Your name will appear on
+          the public court schedule.
         </p>
       </>
     );
@@ -498,22 +521,22 @@ export default function BookingHome({ today }: { today: string }) {
   return (
     <main>
       <header className="site-header">
-        <Link className="brand" href="/" aria-label="COURTSIDE 首页">
+        <Link className="brand" href="/" aria-label="COURTSIDE home">
           <Ball />
           <span>
-            COURTSIDE<small>让每一次上场，都刚刚好。</small>
+            COURTSIDE<small>Make every game count.</small>
           </span>
         </Link>
-        <nav aria-label="主导航">
-          <a href="#schedule">球场日程</a>
-          <a href="#channels">电话 · 邮件 · 短信</a>
+        <nav aria-label="Main navigation">
+          <a href="#schedule">Court schedule</a>
+          <a href="#channels">Phone · Email · SMS</a>
         </nav>
         <div className="header-actions">
           <button className="text-button" onClick={openManage}>
-            管理我的预约
+            Manage my booking
           </button>
           <Link className="staff-link" href="/admin">
-            工作人员 <Arrow diagonal />
+            Staff <Arrow diagonal />
           </Link>
         </div>
       </header>
@@ -523,27 +546,27 @@ export default function BookingHome({ today }: { today: string }) {
             <span /> YOUR NEXT GOOD GAME
           </p>
           <h1>
-            留点时间，
+            Make time,
             <br />
-            给下一场<span>好球。</span>
+            for a <span>good game.</span>
           </h1>
           <p>
-            两片球场，全天候开放。
+            Two courts. Open around the clock.
             <br />
-            找到空闲时段，把时间留给热爱。
+            Find your time and make room for the game you love.
           </p>
           <a href="#schedule" className="primary-button">
-            查看可用时段 <Arrow />
+            View available times <Arrow />
           </a>
           <div className="hero-features">
             <span>
-              <strong>02</strong> 片场地
+              <strong>02</strong> Courts
             </span>
             <span>
-              <strong>24/7</strong> 全天开放
+              <strong>24/7</strong> Open
             </span>
             <span>
-              <strong>2h</strong> 默认时长
+              <strong>2h</strong> Default duration
             </span>
           </div>
         </div>
@@ -571,26 +594,26 @@ export default function BookingHome({ today }: { today: string }) {
           <div>
             <p className="eyebrow">FIND YOUR TIME</p>
             <h2 id="schedule-title">
-              球场日程<span>。</span>
+              Court schedule<span>.</span>
             </h2>
           </div>
           <p>
-            悉尼时间 · Australia/Sydney
+            Sydney time · Australia/Sydney
             <br />
-            <span className="live-indicator" /> 每 30 秒自动更新
+            <span className="live-indicator" /> Updates every 30 seconds
           </p>
         </div>
         <div className="schedule-controls">
           <div className="controls-top">
             <div>
-              <h3>选择日期</h3>
+              <h3>Choose a date</h3>
               <span>{dayLabel(date, true)}</span>
             </div>
             <div className="control-inputs">
               <label>
-                其他日期
+                Another date
                 <input
-                  aria-label="选择其他日期"
+                  aria-label="Choose another date"
                   type="date"
                   min={today}
                   value={date}
@@ -600,9 +623,9 @@ export default function BookingHome({ today }: { today: string }) {
                 />
               </label>
               <label>
-                每次时长
+                Duration
                 <select
-                  aria-label="预约时长"
+                  aria-label="Booking duration"
                   value={duration}
                   onChange={(event) => {
                     setDuration(Number(event.target.value));
@@ -611,14 +634,19 @@ export default function BookingHome({ today }: { today: string }) {
                 >
                   {Array.from({ length: 8 }, (_, index) => (
                     <option key={index + 1} value={index + 1}>
-                      {index + 1} 小时{index === 1 ? "（默认）" : ""}
+                      {hoursLabel(index + 1)}
+                      {index === 1 ? " (default)" : ""}
                     </option>
                   ))}
                 </select>
               </label>
             </div>
           </div>
-          <div className="date-list" role="group" aria-label="选择预订日期">
+          <div
+            className="date-list"
+            role="group"
+            aria-label="Choose a booking date"
+          >
             {days.map((day, index) => (
               <button
                 key={day}
@@ -627,28 +655,36 @@ export default function BookingHome({ today }: { today: string }) {
                 onClick={() => chooseDate(day)}
               >
                 <span>
-                  {new Intl.DateTimeFormat("zh-CN", {
+                  {new Intl.DateTimeFormat("en-AU", {
                     timeZone: "UTC",
                     weekday: "short",
                   }).format(new Date(`${day}T12:00:00Z`))}
                 </span>
                 <strong>{day.slice(8)}</strong>
-                <span>{index === 0 ? "今天" : day.slice(5, 7) + " 月"}</span>
+                <span>
+                  {index === 0
+                    ? "Today"
+                    : new Intl.DateTimeFormat("en-AU", {
+                        timeZone: "UTC",
+                        month: "short",
+                      }).format(new Date(`${day}T12:00:00Z`))}
+                </span>
               </button>
             ))}
           </div>
           <div className="schedule-legend">
             <span>
-              <i className="legend-free" /> 空闲（每格 1 小时）
+              <i className="legend-free" /> Available (1 hour per slot)
             </span>
             <span>
-              <i className="legend-booked" /> 已预约
+              <i className="legend-booked" /> Booked
             </span>
             <span>
-              <i className="legend-unavailable" /> 已过期 / 不可预订
+              <i className="legend-unavailable" /> Past / unavailable
             </span>
             <span>
-              计划预约 {duration} 小时；连续空闲不足时，可选择较短时长
+              Booking for {hoursLabel(duration)}; choose a shorter duration when
+              needed
             </span>
           </div>
         </div>
@@ -661,17 +697,19 @@ export default function BookingHome({ today }: { today: string }) {
                 refreshAvailability();
               }}
             >
-              重新加载
+              Reload
             </button>
           </div>
         )}
         {loading && !currentData && (
           <div className="loading-state" role="status">
-            正在读取球场日程…
+            Loading the court schedule…
           </div>
         )}
         {!loading && !currentData && !loadError && (
-          <div className="loading-state">暂时没有可显示的日程。</div>
+          <div className="loading-state">
+            No schedule is available right now.
+          </div>
         )}
         {currentData && (
           <div className="court-grid">
@@ -682,6 +720,9 @@ export default function BookingHome({ today }: { today: string }) {
               const slots = currentData.slots.filter(
                 (slot) => slot.courtId === court.id,
               );
+              const availableStarts = slots.filter(
+                (slot) => slot.maxDurationHours >= 1,
+              ).length;
               return (
                 <article
                   className={`court-card court-${court.id}`}
@@ -707,17 +748,16 @@ export default function BookingHome({ today }: { today: string }) {
                       <p className="eyebrow">{court.subtitle}</p>
                       <h3>{court.name}</h3>
                     </div>
-                    <span className="court-open">24 小时开放</span>
+                    <span className="court-open">Open 24 hours</span>
                   </div>
                   <div className="slot-section">
                     <div className="slots-label">
-                      <h4>选择开始时间</h4>
+                      <h4>Choose a start time</h4>
                       <span>
-                        {
-                          slots.filter((slot) => slot.maxDurationHours >= 1)
-                            .length
-                        }{" "}
-                        个整点空闲
+                        {availableStarts}{" "}
+                        {availableStarts === 1
+                          ? "available start"
+                          : "available starts"}
                       </span>
                     </div>
                     <div className="time-slots">
@@ -726,11 +766,11 @@ export default function BookingHome({ today }: { today: string }) {
                         const shorter = free && !slot.available;
                         const description = free
                           ? shorter
-                            ? `空闲，最多可连续预约 ${slot.maxDurationHours} 小时，当前 ${duration} 小时不足`
-                            : `空闲，可预约 ${duration} 小时`
+                            ? `Available for up to ${hoursLabel(slot.maxDurationHours)}; your requested ${hoursLabel(duration)} is unavailable`
+                            : `Available for ${hoursLabel(duration)}`
                           : slot.occupied
-                            ? "已预约"
-                            : slot.reason || "不可预订";
+                            ? "Booked"
+                            : slot.reason || "Unavailable";
                         return (
                           <button
                             key={slot.startLocal}
@@ -751,7 +791,7 @@ export default function BookingHome({ today }: { today: string }) {
                             <span>{slot.startLocal.slice(11)}</span>
                             {shorter && (
                               <small className="slot-capacity">
-                                仅 {slot.maxDurationHours}h
+                                {slot.maxDurationHours}h max
                               </small>
                             )}
                           </button>
@@ -761,8 +801,11 @@ export default function BookingHome({ today }: { today: string }) {
                   </div>
                   <div className="day-bookings">
                     <div className="slots-label">
-                      <h4>当天预约</h4>
-                      <span>{booked.length} 场</span>
+                      <h4>Daily bookings</h4>
+                      <span>
+                        {booked.length}{" "}
+                        {booked.length === 1 ? "booking" : "bookings"}
+                      </span>
                     </div>
                     {booked.length ? (
                       <ul>
@@ -774,7 +817,7 @@ export default function BookingHome({ today }: { today: string }) {
                               </strong>
                               <span>{booking.customerName}</span>
                             </div>
-                            <span className="status-tag">已预订</span>
+                            <span className="status-tag">Booked</span>
                           </li>
                         ))}
                       </ul>
@@ -782,9 +825,11 @@ export default function BookingHome({ today }: { today: string }) {
                       <div className="empty-court">
                         <span aria-hidden="true">↗</span>
                         <p>
-                          这一天，还没有预约。
+                          No bookings for this day yet.
                           <br />
-                          <small>选个喜欢的时段，成为第一个上场的人。</small>
+                          <small>
+                            Pick your time and be the first on court.
+                          </small>
                         </p>
                       </div>
                     )}
@@ -796,9 +841,10 @@ export default function BookingHome({ today }: { today: string }) {
         )}
         <div className="schedule-footnote">
           <span>
-            预订即时写入日程；如多人同时选择同一时段，以系统最终确认结果为准。
+            Bookings appear immediately. If several people choose the same time,
+            the final confirmation determines availability.
           </span>
-          {updated && <span>最近更新 {updated}</span>}
+          {updated && <span>Last updated {updated}</span>}
         </div>
       </section>
       <section
@@ -810,10 +856,10 @@ export default function BookingHome({ today }: { today: string }) {
           <div>
             <p className="eyebrow">BOOK YOUR WAY</p>
             <h2 id="channels-title">
-              预约，不只一种方式<span>。</span>
+              More ways to book<span>.</span>
             </h2>
           </div>
-          <p>电话、邮件和短信，共用同一份球场日程。</p>
+          <p>Phone, email and SMS share the same court schedule.</p>
         </div>
         <div className="channels-grid">
           <article>
@@ -821,21 +867,23 @@ export default function BookingHome({ today }: { today: string }) {
               ↗
             </span>
             <div className="channel-title">
-              <h3>电话预约</h3>
+              <h3>Book by phone</h3>
               <span
                 className={
                   channels?.phone ? "channel-ready" : "channel-pending"
                 }
               >
                 {channels === null
-                  ? "读取配置中"
+                  ? "Checking…"
                   : channels.phone
-                    ? "已配置"
-                    : "待接入"}
+                    ? "Ready"
+                    : "Setup needed"}
               </span>
             </div>
             <p>
-              与预约专用语音助手交谈，查询真实空档；核对姓名、联系电话和时段，明确确认后提交预约。
+              Talk to our booking assistant to check live availability. Confirm
+              your name, phone number and time before the assistant submits your
+              booking.
             </p>
             {channels?.phone && channels.phoneNumber ? (
               <a
@@ -845,7 +893,9 @@ export default function BookingHome({ today }: { today: string }) {
                 {channels.phoneNumber}
               </a>
             ) : (
-              <span className="channel-help">配置电话服务及号码后开放</span>
+              <span className="channel-help">
+                Available once the phone service is connected
+              </span>
             )}
           </article>
           <article>
@@ -853,21 +903,22 @@ export default function BookingHome({ today }: { today: string }) {
               @
             </span>
             <div className="channel-title">
-              <h3>邮件预约</h3>
+              <h3>Book by email</h3>
               <span
                 className={
                   channels?.email ? "channel-ready" : "channel-pending"
                 }
               >
                 {channels === null
-                  ? "读取配置中"
+                  ? "Checking…"
                   : channels.email
-                    ? "已配置"
-                    : "待接入"}
+                    ? "Ready"
+                    : "Setup needed"}
               </span>
             </div>
             <p>
-              发送预约指令，由系统自动查询和处理；修改或取消时需提供管理码。
+              Send a booking command for an automatic reply. Include your access
+              code when changing or cancelling a booking.
             </p>
             {channels?.email && channels.emailAddress ? (
               <a
@@ -877,7 +928,9 @@ export default function BookingHome({ today }: { today: string }) {
                 {channels.emailAddress}
               </a>
             ) : (
-              <span className="channel-help">配置邮件收发服务后开放</span>
+              <span className="channel-help">
+                Available once the email service is connected
+              </span>
             )}
           </article>
           <article>
@@ -885,19 +938,20 @@ export default function BookingHome({ today }: { today: string }) {
               ···
             </span>
             <div className="channel-title">
-              <h3>短信预约</h3>
+              <h3>Book by SMS</h3>
               <span
                 className={channels?.sms ? "channel-ready" : "channel-pending"}
               >
                 {channels === null
-                  ? "读取配置中"
+                  ? "Checking…"
                   : channels.sms
-                    ? "已配置"
-                    : "待接入"}
+                    ? "Ready"
+                    : "Setup needed"}
               </span>
             </div>
             <p>
-              通过短信发送结构化指令，获取可用时段或预约结果，无需打开网页。
+              Send a command by SMS to check availability or make a booking,
+              wherever you are.
             </p>
             {channels?.sms && channels.phoneNumber ? (
               <a
@@ -907,43 +961,49 @@ export default function BookingHome({ today }: { today: string }) {
                 {channels.phoneNumber}
               </a>
             ) : (
-              <span className="channel-help">配置短信服务及号码后开放</span>
+              <span className="channel-help">
+                Available once the SMS service is connected
+              </span>
             )}
           </article>
         </div>
         <details className="command-help">
           <summary>
-            查看邮件与短信的指令格式 <span>＋</span>
+            View email and SMS commands <span>＋</span>
           </summary>
           <div>
             <p>
-              日期和时间均为悉尼时间，姓名请使用不含空格的称呼。时长省略时默认 2
-              小时。
+              All dates and times use Sydney time. Enter a name without spaces.
+              The default duration is 2 hours.
             </p>
-            <code>查询 2026-11-10</code>
-            <code>预订 1 2026-11-10 10:00 张三 2</code>
-            <code>修改 预约编号 管理码 2 2026-11-11 14:00 2</code>
-            <code>取消 预约编号 管理码</code>
-            <p>请将示例日期替换为实际日期。发送前请确认对应渠道已配置。</p>
+            <code>{`QUERY ${today}`}</code>
+            <code>{`BOOK 1 ${today} 10:00 Alex 2`}</code>
+            <code>{`CHANGE booking_id access_code 2 ${days[1]} 14:00 2`}</code>
+            <code>CANCEL booking_id access_code</code>
+            <p>
+              Replace the example dates, name, booking_id and access_code with
+              your details. Check that your chosen channel is ready before
+              sending.
+            </p>
           </div>
         </details>
       </section>
       <section className="closing-banner">
         <div>
           <p className="eyebrow">MAKE TIME FOR YOUR GAME</p>
-          <h2>球场见，是最好的约定。</h2>
-          <p>不论哪个时刻，给热爱留一个位置。</p>
+          <h2>See you on court.</h2>
+          <p>Any time is a good time to make room for your game.</p>
         </div>
-        <a href="#schedule" aria-label="返回球场日程">
+        <a href="#schedule" aria-label="Back to the court schedule">
           <Arrow diagonal />
         </a>
       </section>
       <footer>
         <Link href="/" className="footer-brand">
-          COURTSIDE<span>用一场网球，打开生活。</span>
+          COURTSIDE<span>Make room for tennis.</span>
         </Link>
         <p>© {today.slice(0, 4)} COURTSIDE</p>
-        <Link href="/admin">工作人员入口 ↗</Link>
+        <Link href="/admin">Staff sign in ↗</Link>
       </footer>
       <dialog
         ref={dialog}
@@ -958,7 +1018,7 @@ export default function BookingHome({ today }: { today: string }) {
       >
         <button
           className="dialog-close"
-          aria-label="关闭预约窗口"
+          aria-label="Close booking window"
           disabled={busy}
           onClick={() => setMode(null)}
         >
@@ -967,10 +1027,10 @@ export default function BookingHome({ today }: { today: string }) {
         <p className="eyebrow">YOUR NEXT GOOD GAME</p>
         <h2 id="dialog-title">
           {result
-            ? "预约成功，球场见。"
+            ? "Booked. See you on court."
             : mode === "create"
-              ? "为热爱，留个位置。"
-              : "管理我的预约"}
+              ? "Make room for your game."
+              : "Manage my booking"}
         </h2>
         {error && (
           <div className="alert error" role="alert">
@@ -985,13 +1045,15 @@ export default function BookingHome({ today }: { today: string }) {
         {mode === "create" && !result && (
           <form onSubmit={create} className="booking-form">
             <p className="dialog-intro">
-              预订完成后，请保存预约编号和管理码。你可以凭它们修改或取消预约。
+              Save your booking ID and access code after booking. You will need
+              them to change or cancel your booking.
             </p>
             {editorFields()}
             <label className="consent-check">
               <input type="checkbox" required />
               <span>
-                我知悉预约人姓名将在公开日程中显示，并确认预约信息准确。
+                I understand my name will appear on the public schedule and
+                confirm that my booking details are correct.
               </span>
             </label>
             <button
@@ -1002,7 +1064,7 @@ export default function BookingHome({ today }: { today: string }) {
                   editor.durationHours > editorSlot.maxDurationHours)
               }
             >
-              {busy ? "正在确认时段…" : "确认预约"}
+              {busy ? "Confirming availability…" : "Confirm booking"}
               <Arrow />
             </button>
           </form>
@@ -1013,11 +1075,12 @@ export default function BookingHome({ today }: { today: string }) {
               ✓
             </div>
             <p>
-              你的预约已保存。请保管以下管理信息，管理码仅在本次确认中显示。
+              Your booking is saved. Keep these details safe. Your access code
+              is shown only in this confirmation.
             </p>
             <dl className="booking-details">
               <div>
-                <dt>球场</dt>
+                <dt>Court</dt>
                 <dd>
                   {
                     COURTS.find((court) => court.id === result.booking.courtId)
@@ -1026,48 +1089,51 @@ export default function BookingHome({ today }: { today: string }) {
                 </dd>
               </div>
               <div>
-                <dt>日期</dt>
+                <dt>Date</dt>
                 <dd>
                   {dayLabel(dateParts(result.booking.startsAt).date, true)}
                 </dd>
               </div>
               <div>
-                <dt>时段</dt>
+                <dt>Time</dt>
                 <dd>{range(result.booking.startsAt, result.booking.endsAt)}</dd>
               </div>
               <div>
-                <dt>预约人</dt>
+                <dt>Name</dt>
                 <dd>{result.booking.customerName}</dd>
               </div>
             </dl>
             <div className="booking-credentials">
               <div>
-                <span>预约编号</span>
+                <span>Booking ID</span>
                 <strong>{result.booking.id}</strong>
               </div>
               <div>
-                <span>管理码 · 请勿分享</span>
+                <span>Access code · Keep private</span>
                 <strong>{result.accessCode}</strong>
               </div>
             </div>
             <p className="privacy-note">
-              管理码是修改或取消预约的凭证，请截屏或妥善保存。网页预订不会自动发送短信或邮件通知。
+              Keep a screenshot or save your access code to change or cancel
+              your booking. Web bookings do not automatically send SMS or email
+              notifications.
             </p>
             <button
               className="primary-button form-submit"
               onClick={() => setMode(null)}
             >
-              已保存，返回日程 <Arrow />
+              Saved, back to schedule <Arrow />
             </button>
           </div>
         )}
         {mode === "manage" && !managed && (
           <form className="booking-form" onSubmit={lookup}>
             <p className="dialog-intro">
-              输入预约成功时获得的编号和管理码。电话、邮件和短信创建的预约同样可以在此管理。
+              Enter the booking ID and access code from your confirmation. You
+              can also manage bookings made by phone, email or SMS here.
             </p>
             <label>
-              预约编号
+              Booking ID
               <input
                 value={lookupId}
                 onChange={(event) => setLookupId(event.target.value)}
@@ -1077,11 +1143,11 @@ export default function BookingHome({ today }: { today: string }) {
                 minLength={8}
                 maxLength={8}
                 required
-                placeholder="8 位预约编号"
+                placeholder="8-digit booking ID"
               />
             </label>
             <label>
-              管理码
+              Access code
               <input
                 type="password"
                 value={accessCode}
@@ -1092,11 +1158,11 @@ export default function BookingHome({ today }: { today: string }) {
                 minLength={10}
                 maxLength={10}
                 required
-                placeholder="10 位管理码"
+                placeholder="10-digit access code"
               />
             </label>
             <button className="primary-button form-submit" disabled={busy}>
-              {busy ? "正在查询…" : "查询我的预约"}
+              {busy ? "Looking up…" : "Find my booking"}
               <Arrow />
             </button>
           </form>
@@ -1104,24 +1170,27 @@ export default function BookingHome({ today }: { today: string }) {
         {mode === "manage" && managed && (
           <>
             <div className="managed-heading">
-              <span>预约 #{managed.id}</span>
+              <span>Booking #{managed.id}</span>
               <span
                 className={`status-tag ${managed.status === "cancelled" ? "cancelled" : ""}`}
               >
-                {managed.status === "cancelled" ? "已取消" : "已确认"}
+                {managed.status === "cancelled" ? "Cancelled" : "Confirmed"}
               </span>
             </div>
             {managed.status === "confirmed" ? (
               <form className="booking-form" onSubmit={changeBooking}>
                 {editorFields()}
                 <button className="primary-button form-submit" disabled={busy}>
-                  {busy ? "正在保存…" : "保存修改"}
+                  {busy ? "Saving…" : "Save changes"}
                   <Arrow />
                 </button>
                 <div className="cancel-area">
                   {cancelConfirm ? (
                     <>
-                      <p>确定取消这次预约？取消后时段将重新开放。</p>
+                      <p>
+                        Cancel this booking? The time will become available
+                        again.
+                      </p>
                       <div>
                         <button
                           type="button"
@@ -1129,7 +1198,7 @@ export default function BookingHome({ today }: { today: string }) {
                           disabled={busy}
                           onClick={() => setCancelConfirm(false)}
                         >
-                          保留预约
+                          Keep booking
                         </button>
                         <button
                           type="button"
@@ -1137,7 +1206,7 @@ export default function BookingHome({ today }: { today: string }) {
                           disabled={busy}
                           onClick={cancelBooking}
                         >
-                          {busy ? "正在取消…" : "确定取消预约"}
+                          {busy ? "Cancelling…" : "Confirm cancellation"}
                         </button>
                       </div>
                     </>
@@ -1148,7 +1217,7 @@ export default function BookingHome({ today }: { today: string }) {
                       disabled={busy}
                       onClick={() => setCancelConfirm(true)}
                     >
-                      取消这次预约
+                      Cancel this booking
                     </button>
                   )}
                 </div>
@@ -1157,7 +1226,7 @@ export default function BookingHome({ today }: { today: string }) {
               <>
                 <dl className="booking-details">
                   <div>
-                    <dt>球场</dt>
+                    <dt>Court</dt>
                     <dd>
                       {
                         COURTS.find((court) => court.id === managed.courtId)
@@ -1166,11 +1235,11 @@ export default function BookingHome({ today }: { today: string }) {
                     </dd>
                   </div>
                   <div>
-                    <dt>原日期</dt>
+                    <dt>Original date</dt>
                     <dd>{dayLabel(dateParts(managed.startsAt).date, true)}</dd>
                   </div>
                   <div>
-                    <dt>原时段</dt>
+                    <dt>Original time</dt>
                     <dd>{range(managed.startsAt, managed.endsAt)}</dd>
                   </div>
                 </dl>
@@ -1178,7 +1247,7 @@ export default function BookingHome({ today }: { today: string }) {
                   className="primary-button form-submit"
                   onClick={() => setMode(null)}
                 >
-                  返回日程 <Arrow />
+                  Back to schedule <Arrow />
                 </button>
               </>
             )}

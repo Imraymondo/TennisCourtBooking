@@ -148,18 +148,18 @@ function caller() {
   };
 }
 
-test("diagnostics distinguish initial and DTMF callbacks from final Mandarin speech and show actual step progress", async () => {
+test("diagnostics distinguish initial and DTMF callbacks from final speech and show actual step progress", async () => {
   const call = caller();
   const first = (await call.send()).diagnostic!;
-  assert.equal(first.version, "mandarin-gather-2");
+  assert.equal(first.version, "english-gather-3");
   assert.equal(first.turnState, "initial");
   assert.equal(first.speechField, "absent");
   assert.equal(first.input, "empty");
   assert.equal(first.stepBefore, null);
   assert.equal(first.stepAfter, "menu");
   assert.equal(first.cached, false);
-  assert.equal(first.configuredLanguage, "cmn-Hans-CN");
-  assert.equal(first.responseLanguage, "cmn-Hans-CN");
+  assert.equal(first.configuredLanguage, "en-AU");
+  assert.equal(first.responseLanguage, "en-AU");
 
   const selected = (await call.send({ digits: "2" })).diagnostic!;
   assert.equal(selected.turnState, "current");
@@ -185,8 +185,8 @@ test("diagnostics distinguish initial and DTMF callbacks from final Mandarin spe
     null,
     "date-step diagnostics do not reinterpret a date answer as a new booking intent",
   );
-  assert.equal(heard.configuredLanguage, "cmn-Hans-CN");
-  assert.equal(heard.responseLanguage, "cmn-Hans-CN");
+  assert.equal(heard.configuredLanguage, "en-AU");
+  assert.equal(heard.responseLanguage, "en-AU");
   assert.equal(listBookings().length, 0);
   assert.ok(!printed.join("\n").includes("我要预约明天"));
 });

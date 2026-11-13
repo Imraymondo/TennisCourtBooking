@@ -32,7 +32,7 @@ const fields = {
   court: 2,
   hour: "15",
   duration: 2,
-  name: "张三",
+  name: "John Smith",
   correction: null,
 };
 
@@ -557,8 +557,9 @@ test(
     const audio = object(object(sessionUpdate.session).audio);
     assert.deepEqual(object(audio.input).format, { type: "audio/pcmu" });
     assert.deepEqual(object(audio.output).format, { type: "audio/pcmu" });
+    assert.equal(object(object(audio.input).transcription).language, "en");
     await provider.prompts.wait(
-      (prompt) => /您好，想预约球场还是查空档/.test(prompt),
+      (prompt) => /Hello.*book a court.*check availability/i.test(prompt),
       "booking greeting",
     );
     const output = await twilio.messages.wait(
@@ -582,10 +583,10 @@ test(
 
     provider.transcript(
       "item_booking",
-      "我要预约2099年12月1日下午三点二号球场两个小时，我叫张三",
+      "I would like to book Court 2 at three pm on 1 December 2099 for two hours. My name is John Smith",
     );
     await provider.prompts.wait(
-      (prompt) => /联系电话/.test(prompt),
+      (prompt) => /contact number/i.test(prompt),
       "contact question",
     );
     assert.equal(provider.toolResponses, 1);
@@ -593,25 +594,25 @@ test(
       (await schedule()).courts.flatMap((court) => court.bookings).length,
       0,
     );
-    provider.transcript("item_contact", "使用来电号码");
+    provider.transcript("item_contact", "use my calling number");
     const summary = await provider.prompts.wait(
-      (prompt) => /确认请说确认预约/.test(prompt),
+      (prompt) => /say confirm booking/i.test(prompt),
       "uncommitted booking review",
     );
-    assert.match(summary, /预约人张三/);
-    assert.match(summary, /联系电话/);
+    assert.match(summary, /Booking name: John Smith/);
+    assert.match(summary, /contact number/i);
     assert.match(
       summary,
-      /1号场/,
+      /Court 1/,
       "the server assigns court one despite caller/model court two",
     );
     assert.equal(
       (await schedule()).courts.flatMap((court) => court.bookings).length,
       0,
     );
-    provider.transcript("item_confirm", "确认预约");
+    provider.transcript("item_confirm", "confirm booking");
     const committed = await provider.prompts.wait(
-      (prompt) => /预约成功/.test(prompt),
+      (prompt) => /Booking confirmed/i.test(prompt),
       "committed booking and management code",
     );
     assert.equal(
@@ -623,7 +624,7 @@ test(
     const bookings = publicSchedule.courts.flatMap((court) => court.bookings);
     assert.equal(bookings.length, 1);
     const booking = bookings[0];
-    assert.equal(booking.customerName, "张三");
+    assert.equal(booking.customerName, "John Smith");
     assert.equal(booking.courtId, 1);
     assert.equal(booking.startsAt, "2099-12-01T04:00:00Z");
     assert.equal(
@@ -654,14 +655,14 @@ test(
       .booking;
     assert.equal(privateBooking.phone, callingNumber);
     assert.equal(privateBooking.source, "phone");
-    assert.equal(privateBooking.customerName, "张三");
+    assert.equal(privateBooking.customerName, "John Smith");
     assert.equal(privateBooking.durationHours, 2);
 
     // A new answer acts as a barrier: the duplicate confirmation precedes it on
     // the same provider socket and must not become a second booking operation.
     const promptCursor = provider.prompts.values.length;
-    provider.transcript("item_confirm", "确认预约");
-    provider.transcript("item_after_replay", "不确认");
+    provider.transcript("item_confirm", "confirm booking");
+    provider.transcript("item_after_replay", "do not confirm");
     await provider.prompts.wait(
       () => true,
       "turn after duplicate ASR item",
@@ -708,7 +709,7 @@ test(
         callSid: call.callSid,
         streamSid: call.streamSid,
         inputId,
-        transcript: "确认预约",
+        transcript: "confirm booking",
       });
       assert.equal(
         response.status,
@@ -755,7 +756,7 @@ test(
     );
     provider.omitFunctionCalls = true;
     await provider.prompts.wait(
-      (prompt) => /您好，想预约球场还是查空档/.test(prompt),
+      (prompt) => /Hello.*book a court.*check availability/i.test(prompt),
       "raw-speech booking greeting",
     );
 
@@ -778,56 +779,71 @@ test(
         description,
         cursor,
       );
-      assert.doesNotMatch(prompt, /想订一号场|选择.*球场/);
+      assert.doesNotMatch(prompt, /which court|choose.*court/i);
       return prompt;
     };
 
     assert.equal((await bookings()).length, 0);
     // Every interpretation response completes with output: []; each answer
     // must reach the real booking engine as its original raw transcription.
-    await answer("raw_intent", "我要预定", /哪一天/, "booking date question");
+    await answer(
+      "raw_intent",
+      "I would like to book a court",
+      /which date/i,
+      "booking date question",
+    );
     assert.equal(provider.toolResponses, 1);
     assert.equal((await bookings()).length, 0);
     const available = await answer(
       "raw_date",
       // Repeating the same date in another format is a clarification, just as
       // saying "明天11月13号" on November 12 is one requested calendar day.
-      "2099年12月2日，也就是2099-12-02",
-      /几点开始/,
+      "2 December 2099, that is 2099-12-02",
+      /what time.*start/i,
       "start time question directly after the raw date",
     );
-    assert.doesNotMatch(available, /想订一号场|想查一号场/);
+    assert.doesNotMatch(available, /which court|choose.*court/i);
     assert.equal((await bookings()).length, 0);
-    await answer("raw_hour", "下午三点", /几个小时/, "duration question");
+    await answer(
+      "raw_hour",
+      "three pm",
+      /how many hours/i,
+      "duration question",
+    );
     assert.equal((await bookings()).length, 0);
     await answer(
       "raw_duration",
-      "默认",
-      /预约人叫什么名字/,
+      "default",
+      /booking name/i,
       "public name question",
     );
     assert.equal((await bookings()).length, 0);
-    await answer("raw_name", "我叫李四", /联系电话/, "contact question");
+    await answer(
+      "raw_name",
+      "My name is Jane Smith",
+      /contact number/i,
+      "contact question",
+    );
     assert.equal((await bookings()).length, 0);
     assert.equal(provider.toolResponses, 5);
     const review = await answer(
       "raw_contact",
-      "使用来电号码",
-      /确认请说确认预约/,
+      "use my calling number",
+      /say confirm booking/i,
       "uncommitted raw-speech booking review",
     );
-    assert.match(review, /预约人李四/);
-    assert.match(review, /两小时/);
+    assert.match(review, /Booking name: Jane Smith/);
+    assert.match(review, /2 hours/);
     assert.match(
       review,
-      /2号场/,
+      /Court 2/,
       "court one is occupied for the requested full interval",
     );
     assert.equal((await bookings()).length, 0);
     await answer(
       "raw_confirm",
-      "确认预约",
-      /预约成功/,
+      "confirm booking",
+      /Booking confirmed/i,
       "raw-speech booking committed after confirmation",
     );
     assert.equal(
@@ -837,7 +853,7 @@ test(
     );
     const committed = await bookings();
     assert.equal(committed.length, 1);
-    assert.equal(committed[0].customerName, "李四");
+    assert.equal(committed[0].customerName, "Jane Smith");
     assert.equal(committed[0].courtId, 2);
     const completeSchedule = await allBookings();
     assert.equal(completeSchedule.length, 2);
@@ -853,11 +869,11 @@ test(
     );
 
     // A following raw answer is a barrier for the duplicate confirmation.
-    provider.transcript("raw_confirm", "确认预约");
+    provider.transcript("raw_confirm", "confirm booking");
     await answer(
       "raw_after_replay",
-      "不确认",
-      /还需要预约球场或查空档/,
+      "do not confirm",
+      /would you like to book a court or check availability/i,
       "turn after replay",
     );
     assert.equal((await bookings()).length, 1);

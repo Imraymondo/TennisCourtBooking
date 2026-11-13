@@ -60,21 +60,24 @@ async function pendingBooking(name = "张三") {
   await say();
   await say("我要预约");
   const hourQuestion = await say("2099年12月1日");
-  assert.match(hourQuestion.xml, /几点开始/);
-  assert.doesNotMatch(hourQuestion.xml, /选择.*球场|哪.*球场/);
+  assert.match(hourQuestion.xml, /what time.*start/i);
+  assert.doesNotMatch(hourQuestion.xml, /choose.*court|which.*court/i);
   await say("下午三点");
   const nameQuestion = await say("默认");
-  assert.match(nameQuestion.xml, /姓名会公开显示/);
+  assert.match(
+    nameQuestion.xml,
+    /name will appear publicly on the website schedule/i,
+  );
   const contact = await say(`我叫${name}`);
-  assert.match(contact.xml, /联系电话/);
+  assert.match(contact.xml, /contact number/i);
   const summary = await say("使用来电号码");
   assert.match(summary.xml, new RegExp(name));
-  assert.match(summary.xml, /联系电话/);
-  assert.match(summary.xml, /两小时/);
-  assert.match(summary.xml, /联系电话使用来电号码/);
+  assert.match(summary.xml, /contact number/i);
+  assert.match(summary.xml, /2 hours/);
+  assert.match(summary.xml, /contact number: the number you are calling from/i);
   assert.doesNotMatch(
     summary.xml,
-    /61400123456|六一四零|姓名会公开|15:00|2099-/,
+    /61400123456|six one four zero|name will appear publicly|15:00|2099-/i,
   );
   return say;
 }
@@ -83,16 +86,22 @@ test("spoken booking collects name and confirmed contact, stays on topic, and on
   const say = await pendingBooking();
   assert.equal(listBookings().length, 0);
   const unrelated = await say("给我讲个笑话");
-  assert.match(unrelated.xml, /只能帮助/);
+  assert.match(
+    unrelated.xml,
+    /only help check, create, change or cancel tennis court bookings/i,
+  );
   assert.equal(listBookings().length, 0);
   await say("我还没确认");
   assert.equal(listBookings().length, 0);
   const committed = await say("确认预约");
-  assert.match(committed.xml, /预约成功/);
-  assert.match(committed.xml, /短信暂不可用/);
-  assert.equal([...committed.xml.matchAll(/预约编号：/g)].length, 1);
-  assert.equal([...committed.xml.matchAll(/管理码：/g)].length, 1);
-  assert.doesNotMatch(committed.xml, /再次播报|网站日程已更新/);
+  assert.match(committed.xml, /Booking confirmed/i);
+  assert.match(committed.xml, /SMS is unavailable/i);
+  assert.equal([...committed.xml.matchAll(/booking reference:/g)].length, 1);
+  assert.equal([...committed.xml.matchAll(/Access code:/g)].length, 1);
+  assert.doesNotMatch(
+    committed.xml,
+    /read.*again|website schedule has been updated/i,
+  );
   assert.equal(listBookings().length, 1);
   const booking = listBookings()[0];
   assert.equal(booking.customerName, "张三");
@@ -127,7 +136,7 @@ test("rejecting a booking or correcting its name never writes the earlier summar
   const corrected = await pendingBooking();
   await corrected("修改姓名");
   const newSummary = await corrected("我叫李四");
-  assert.match(newSummary.xml, /预约人李四/);
+  assert.match(newSummary.xml, /Booking name: 李四/i);
   assert.equal(listBookings().length, 0);
   await corrected("确认预约");
   assert.equal(listBookings()[0].customerName, "李四");
@@ -138,9 +147,9 @@ test("a last-second conflict reviews the other available court and requires anot
   const second = await pendingBooking("李四");
   await first("确认预约");
   const conflict = await second("确认预约");
-  assert.match(conflict.xml, /已被预约/);
-  assert.match(conflict.xml, /2号场/);
-  assert.match(conflict.xml, /确认预约/);
+  assert.match(conflict.xml, /just booked/i);
+  assert.match(conflict.xml, /Court 2/);
+  assert.match(conflict.xml, /confirm booking/i);
   assert.equal(listBookings().length, 1);
   await second("确认预约");
   assert.equal(listBookings().length, 2);
@@ -165,7 +174,7 @@ test("automatic assignment checks the full requested interval before selecting c
   });
   const say = await pendingBooking();
   const committed = await say("确认预约");
-  assert.match(committed.xml, /预约成功/);
+  assert.match(committed.xml, /Booking confirmed/i);
   const assigned = listBookings().find(
     (booking) => booking.customerName === "张三",
   );
@@ -182,14 +191,20 @@ test("half-hour requests and unrelated questions are rejected; an alternative sp
   await say();
   await say("我要预约");
   await say("2099年12月1日");
-  assert.match((await say("下午三点半")).xml, /整点/);
-  assert.match((await say("今天天气怎么样")).xml, /只能帮助/);
+  assert.match((await say("下午三点半")).xml, /whole hour|on the hour/i);
+  assert.match(
+    (await say("今天天气怎么样")).xml,
+    /only help check, create, change or cancel tennis court bookings/i,
+  );
   assert.equal(listBookings().length, 0);
   await say("下午三点");
   await say("两个小时");
   await say("我叫王五");
   const summary = await say("我的电话是零四一二三四五六七八");
-  assert.match(summary.xml, /零四一二，三四五六，七八/);
+  assert.match(
+    summary.xml,
+    /zero four one two, three four five six, seven eight/,
+  );
   assert.equal(listBookings().length, 0);
   await say("确认预约");
   assert.equal(listBookings()[0].phone, "0412345678");
@@ -199,8 +214,8 @@ test("one spoken request retains intent, date and hour while the server assigns 
   const say = caller();
   await say();
   const offered = await say("我要预约2099年12月1日下午三点的二号球场");
-  assert.match(offered.xml, /几个小时/);
-  assert.doesNotMatch(offered.xml, /选择.*球场|哪.*球场/);
+  assert.match(offered.xml, /how many hours/i);
+  assert.doesNotMatch(offered.xml, /choose.*court|which.*court/i);
   await say("默认");
   await say("我叫张三");
   await say("使用来电号码");
@@ -224,8 +239,8 @@ test("spoken availability reports real open starts in natural hours without disc
   await say("查空档");
   await say("2099年12月1日");
   const reply = await say("默认");
-  assert.match(reply.xml, /1号场：凌晨零点到下午一点、下午五点到晚上十一点/);
-  assert.match(reply.xml, /2号场：凌晨零点到晚上十一点/);
+  assert.match(reply.xml, /Court 1: midnight to 1 pm, 5 to 11 pm/);
+  assert.match(reply.xml, /Court 2: midnight to 11 pm/);
   assert.doesNotMatch(reply.xml, /其他预约人|999999|\d{2}:00|2099-/);
   assert.equal(listBookings().length, 1);
 });

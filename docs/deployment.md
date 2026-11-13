@@ -8,7 +8,7 @@
 2. 检查配置：Node24.22.1、单实例、持久磁盘 `/var/data`、SQLite路径 `/var/data/bookings.sqlite`、健康检查 `/api/health`。确认平台显示的费用后创建。
 3. Render 自动生成高强度 `ADMIN_PASSWORD`。在服务的安全环境变量页面查看并保存该密码，供 `/admin` 登录使用；它不会写入仓库或构建日志。
 4. 首次构建和健康检查通过后，在服务页面复制平台实际分配的 HTTPS 地址。无需购买域名。启动器自动将 `RENDER_EXTERNAL_URL` 作为 `APP_BASE_URL`。
-5. 访问公开首页与 `/api/health`。健康状态应为 `{"status":"ok","service":"courtside"}`。登录后台，验证测试预约的创建、修改和取消，然后重启服务验证数据仍在。
+5. 访问英语公开首页与英语工作人员后台，并检查 `/api/health`。健康状态应为 `{"status":"ok","service":"courtside"}`。登录后台，验证测试预约的创建、修改和取消，然后重启服务验证数据仍在。
 
 Blueprint入口：[从此仓库准备Render部署](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2FImraymondo%2FTennisCourtBooking)。这是部署配置入口，不是已经上线的网站。
 
@@ -16,7 +16,9 @@ Blueprint入口：[从此仓库准备Render部署](https://render.com/deploy?rep
 
 在部署服务的安全环境变量中设置已有 `TWILIO_AUTH_TOKEN` 和 `TWILIO_PHONE_NUMBER`。本开发环境中的值不会自动复制到部署平台。使用原来的密钥即可，无需在聊天中提供。
 
-在 Twilio 号码的 Voice 配置中，将收到电话时的 POST webhook 指向部署站点的 `/api/webhooks/voice`。语音助手只处理预约相关问题，通过语音识别收集日期、场地、时间、时长、姓名和联系电话，播报数据库中的真实空档，并在客户明确确认后写入预约。姓名公开展示，联系电话只在受保护的管理界面显示。
+在 Twilio 号码的 Voice 配置中，将收到电话时的 POST webhook 指向部署站点的 `/api/webhooks/voice`。语音助手用英语处理预约相关问题，Gather识别使用 `en-AU`，播报使用 `Polly.Olivia-Neural`；通过语音识别收集日期、时间、时长、姓名和联系电话，由程序分配球场，播报数据库中的真实空档，并在客户明确确认后写入预约。姓名公开展示，联系电话只在受保护的管理界面显示。
+
+可用英语说“I’d like to book tomorrow at 3 pm.”，核对完整复述后，在下一轮说“confirm booking”或按1。Realtime输入转写也使用英语 `en`，本机音频桥配置见[Realtime电话接入](realtime-phone.md)。
 
 Twilio 回调认证需要精确的站点 origin。以后启用自定义域名时，将 `APP_BASE_URL` 显式设为该 HTTPS origin，并相应修改 Twilio webhook，避免签名校验失败。
 

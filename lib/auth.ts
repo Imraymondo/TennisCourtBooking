@@ -58,14 +58,15 @@ export function isAdmin(request: Request): boolean {
 }
 
 export function requireAdmin(request: Request): void {
-  if (!isAdmin(request)) throw new AppError("请先登录工作人员账户", 401);
+  if (!isAdmin(request))
+    throw new AppError("Please sign in with a staff account.", 401);
 }
 
 export function login(password: unknown): string {
   const expected = adminPassword();
   if (!expected)
     throw new AppError(
-      "工作人员登录尚未配置，请设置至少 12 位的 ADMIN_PASSWORD",
+      "Staff sign-in is not configured. Set ADMIN_PASSWORD to at least 12 characters.",
       503,
     );
   if (
@@ -73,7 +74,7 @@ export function login(password: unknown): string {
     password.length > 256 ||
     !timingSafeEqual(Buffer.from(hash(password)), Buffer.from(hash(expected)))
   ) {
-    throw new AppError("密码不正确", 401);
+    throw new AppError("Incorrect password.", 401);
   }
   const token = randomBytes(32).toString("base64url");
   const db = getDatabase();

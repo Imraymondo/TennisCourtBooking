@@ -167,9 +167,9 @@ test("missing or invalid outbound configuration keeps the booking and makes no r
     assert.equal(
       await finalizePhoneBookingSms(
         valueCreated.callSid,
-        "预约成功。请保管预约详情。",
+        "Booking confirmed. Keep your booking details safe.",
       ),
-      "预约成功。请保管预约详情。",
+      "Booking confirmed. Keep your booking details safe.",
     );
   }
   assert.equal(calls.length, 0);
@@ -255,9 +255,9 @@ test("committed queue submits one private receipt to the selected AU contact and
   assert.equal(request.body.get("To"), "+61412345678");
   assert.deepEqual([...request.body.keys()].sort(), ["Body", "From", "To"]);
   const body = request.body.get("Body")!;
-  assert.match(body, /一号球场/);
-  assert.match(body, /2099-12-01 15:00至2099-12-01 17:00/);
-  assert.match(body, /共2小时/);
+  assert.match(body, /Court 1/);
+  assert.match(body, /2099-12-01 15:00 to 2099-12-01 17:00/);
+  assert.match(body, /2 hours/);
   assert.ok(body.includes(value.booking.customerName));
   assert.ok(body.includes(value.booking.id));
   assert.ok(body.includes(value.accessCode));
@@ -298,8 +298,11 @@ test("unrelated turns do not send a pending notification; a later replay can rec
   const calls = fakeProvider(t);
   const value = confirmed();
   assert.equal(
-    await finalizePhoneBookingSms(value.callSid, "还需要其他帮助吗？"),
-    "还需要其他帮助吗？",
+    await finalizePhoneBookingSms(
+      value.callSid,
+      "Can I help with anything else?",
+    ),
+    "Can I help with anything else?",
   );
   assert.equal(calls.length, 0);
   assert.equal(
@@ -348,14 +351,14 @@ test("a bare or differently bound marker never guesses which pending receipt to 
   const value = confirmed();
   assert.equal(
     await finalizePhoneBookingSms(value.callSid, PHONE_SMS_PENDING_PROMPT),
-    "预约成功，短信发送状态未确认。",
+    "Booking confirmed; SMS delivery is unconfirmed.",
   );
   assert.equal(
     await finalizePhoneBookingSms(
       "CA-unrelated",
       phoneSmsPendingPrompt(value.booking.id),
     ),
-    "预约成功，短信发送状态未确认。",
+    "Booking confirmed; SMS delivery is unconfirmed.",
   );
   assert.equal(calls.length, 0);
   assert.equal(
@@ -432,9 +435,9 @@ test("HTTP rejection gives one spoken receipt without rolling back the booking, 
   const value = confirmed();
   const xml = `<Response><Say>${phoneSmsPendingPrompt(value.booking.id)}</Say></Response>`;
   const result = await finalizePhoneBookingSms(value.callSid, xml);
-  assert.match(result, /预约成功，短信暂时发送不了/);
-  assert.equal((result.match(/预约编号：/g) || []).length, 1);
-  assert.equal((result.match(/管理码：/g) || []).length, 1);
+  assert.match(result, /Booking confirmed; the SMS could not be sent/);
+  assert.equal((result.match(/Booking reference: /g) || []).length, 1);
+  assert.equal((result.match(/Access code: /g) || []).length, 1);
   assert.ok(result.includes(spokenAccessCode(value.booking.id)));
   assert.ok(result.includes(spokenAccessCode(value.accessCode)));
   assert.ok(!result.includes("private provider"));
@@ -451,7 +454,10 @@ test("HTTP rejection gives one spoken receipt without rolling back the booking, 
   );
   const gather = `<Gather><Say>${phoneSmsPendingPrompt(value.booking.id)}</Say></Gather>`;
   const gatherReceipt = await finalizePhoneBookingSms(value.callSid, gather);
-  assert.match(gatherReceipt, /^<Gather><Say>预约成功，短信暂时发送不了/);
+  assert.match(
+    gatherReceipt,
+    /^<Gather><Say>Booking confirmed; the SMS could not be sent/,
+  );
   assert.match(gatherReceipt, /<\/Say><\/Gather>$/);
   assert.ok(!gatherReceipt.includes("<A&B>"));
   assert.equal(calls.length, 1);
@@ -471,8 +477,8 @@ for (const scenario of [
       value.callSid,
       phoneSmsPendingPrompt(value.booking.id),
     );
-    assert.match(result, /预约成功，短信发送状态未确认/);
-    assert.equal((result.match(/管理码：/g) || []).length, 1);
+    assert.match(result, /Booking confirmed; SMS delivery is unconfirmed/);
+    assert.equal((result.match(/Access code: /g) || []).length, 1);
     assert.equal(
       getPhoneBookingSmsOutbox(value.callSid, value.booking.id)?.status,
       "unknown",
@@ -507,7 +513,7 @@ test("the total send timeout is four seconds and remains uncertain on replay", a
   );
   t.mock.timers.tick(1);
   const result = await sending;
-  assert.match(result, /短信发送状态未确认/);
+  assert.match(result, /SMS delivery is unconfirmed/);
   assert.equal(
     getPhoneBookingSmsOutbox(value.callSid, value.booking.id)?.status,
     "unknown",
@@ -543,7 +549,7 @@ test("another process's persistent claim prevents a second send; expired claims 
     value.callSid,
     phoneSmsPendingPrompt(value.booking.id),
   );
-  assert.match(result, /短信发送状态未确认/);
+  assert.match(result, /SMS delivery is unconfirmed/);
   assert.equal(
     getPhoneBookingSmsOutbox(value.callSid, value.booking.id)?.status,
     "unknown",
@@ -566,7 +572,7 @@ test("removed configuration after queue fails safely without sending or rolling 
     value.callSid,
     phoneSmsPendingPrompt(value.booking.id),
   );
-  assert.match(result, /预约成功，短信暂时发送不了/);
+  assert.match(result, /Booking confirmed; the SMS could not be sent/);
   assert.equal(calls.length, 0);
   assert.equal(
     getPhoneBookingSmsOutbox(value.callSid, value.booking.id)?.status,
@@ -585,7 +591,7 @@ test("synchronous request setup errors are uncertain without leaving a timeout r
     value.callSid,
     phoneSmsPendingPrompt(value.booking.id),
   );
-  assert.match(result, /短信发送状态未确认/);
+  assert.match(result, /SMS delivery is unconfirmed/);
   assert.equal(
     getPhoneBookingSmsOutbox(value.callSid, value.booking.id)?.status,
     "unknown",
@@ -606,9 +612,9 @@ test("completion storage failure preserves one usable spoken receipt and the per
   `);
   const prompt = phoneSmsPendingPrompt(value.booking.id);
   const result = await finalizePhoneBookingSms(value.callSid, prompt);
-  assert.match(result, /预约成功，短信发送状态未确认/);
-  assert.equal((result.match(/预约编号：/g) || []).length, 1);
-  assert.equal((result.match(/管理码：/g) || []).length, 1);
+  assert.match(result, /Booking confirmed; SMS delivery is unconfirmed/);
+  assert.equal((result.match(/Booking reference: /g) || []).length, 1);
+  assert.equal((result.match(/Access code: /g) || []).length, 1);
   assert.ok(result.includes(spokenAccessCode(value.booking.id)));
   assert.ok(result.includes(spokenAccessCode(value.accessCode)));
   assert.equal(

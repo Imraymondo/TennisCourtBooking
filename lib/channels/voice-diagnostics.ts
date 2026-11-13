@@ -85,9 +85,7 @@ export function logVoiceCallback(
           : null,
       configuredLanguage: VOICE_CAPTURE.language,
       responseLanguage:
-        responseLanguage === "cmn-Hans-CN" || responseLanguage === "zh-CN"
-          ? responseLanguage
-          : "other",
+        responseLanguage === "en-AU" ? responseLanguage : "other",
     }),
   );
 }

@@ -126,7 +126,7 @@ async function pendingBooking() {
     .response();
   assert.equal(collect.status, 200);
   const contact = await collect.json();
-  assert.match(contact.prompt, /联系电话/);
+  assert.match(contact.prompt, /contact number/i);
   assert.equal(call.state().step, "contact");
   assert.equal(
     call.state().court,
@@ -135,7 +135,7 @@ async function pendingBooking() {
   );
   const summary = await call.send("使用来电号码").response();
   assert.equal(summary.status, 200);
-  assert.match((await summary.json()).prompt, /预约人张三/);
+  assert.match((await summary.json()).prompt, /Booking name: 张三/);
   assert.equal(call.state().step, "confirm");
   assert.equal(listBookings().length, 0);
   return call;
@@ -258,7 +258,7 @@ test("tickets are stored hashed, bound to a call, consumed once, and replayed on
   const first = await call.start();
   assert.equal(first.status, 200);
   const result = await first.json();
-  assert.match(result.prompt, /预约/);
+  assert.match(result.prompt, /book a court/);
   assert.equal(result.context.step, "menu");
   assert.deepEqual(await (await call.start()).json(), result);
   assert.equal(
@@ -293,9 +293,9 @@ test("natural fields fill the existing voice form and only a raw confirmation wr
   const first = await confirm.response();
   assert.equal(first.status, 200);
   const result = await first.json();
-  assert.match(result.prompt, /预约成功/);
-  assert.match(result.prompt, /预约编号/);
-  assert.match(result.prompt, /管理码/);
+  assert.match(result.prompt, /Booking confirmed/);
+  assert.match(result.prompt, /booking reference/i);
+  assert.match(result.prompt, /Access code/i);
   assert.doesNotMatch(result.prompt, /<Say|<Gather|&amp;|&lt;/);
   assert.equal(listBookings().length, 1);
   const booking = listBookings()[0];
@@ -323,6 +323,60 @@ test("natural fields fill the existing voice form and only a raw confirmation wr
     );
 });
 
+test("English Realtime booking uses native English prompts and commits only after a raw confirmation", async () => {
+  const call = ticketedCall();
+  const started = await call.start();
+  assert.equal(started.status, 200);
+  const greeting = await started.json();
+  assert.match(
+    greeting.prompt,
+    /Hello\. Would you like to book a court or check availability\?/,
+  );
+  assert.doesNotMatch(greeting.prompt, /[\p{Script=Han}]/u);
+
+  for (const [transcript, step] of [
+    ["I want to book a court", "date"],
+    ["1 December 2099", "hour"],
+    ["3 pm", "duration"],
+    ["three hours", "name"],
+    ["My name is Alice", "contact"],
+    ["use my calling number", "confirm"],
+  ]) {
+    const turn = call.send(transcript);
+    assert.equal(Object.hasOwn(turn.body, "interpretation"), false);
+    const response = await turn.response();
+    assert.equal(response.status, 200);
+    const reply = await response.json();
+    assert.equal(reply.context.step, step);
+    assert.doesNotMatch(reply.prompt, /[\p{Script=Han}]/u);
+    assert.doesNotMatch(reply.prompt, /<Say|<Gather|&amp;|&lt;/);
+    assert.equal(listBookings().length, 0);
+  }
+
+  const invented = await call
+    .send("I need to think about it", understanding({ action: "book" }))
+    .response();
+  assert.equal(invented.status, 200);
+  assert.equal((await invented.json()).context.step, "confirm");
+  assert.equal(listBookings().length, 0);
+
+  const confirmation = call.send("confirm booking");
+  const committed = await confirmation.response();
+  assert.equal(committed.status, 200);
+  const receipt = await committed.json();
+  assert.match(receipt.prompt, /Booking confirmed/);
+  assert.doesNotMatch(receipt.prompt, /[\p{Script=Han}]/u);
+  assert.equal(listBookings().length, 1);
+  const booking = listBookings()[0];
+  assert.equal(booking.customerName, "Alice");
+  assert.equal(booking.phone, PHONE);
+  assert.equal(booking.courtId, 1);
+  assert.equal(booking.startsAt, "2099-12-01T04:00:00Z");
+  assert.equal(booking.durationHours, 3);
+  assert.deepEqual(await (await confirmation.response()).json(), receipt);
+  assert.equal(listBookings().length, 1);
+});
+
 test("raw Realtime booking skips court selection and assigns a court available for the whole requested duration", async () => {
   occupy(1, "2099-12-01T17:00", 1);
   const call = ticketedCall();
@@ -339,7 +393,10 @@ test("raw Realtime booking skips court selection and assigns a court available f
     assert.equal(response.status, 200);
     const reply = await response.json();
     assert.equal(reply.context.step, step);
-    assert.doesNotMatch(reply.prompt, /请选择一号或二号|想订一号场还是二号场/);
+    assert.doesNotMatch(
+      reply.prompt,
+      /choose (?:a|which|between).*court|(?:which|what) court/i,
+    );
     assert.equal(
       listBookings().length,
       1,
@@ -354,7 +411,7 @@ test("raw Realtime booking skips court selection and assigns a court available f
   assert.equal(call.state().duration, 3);
   const response = await call.send("确认预约").response();
   assert.equal(response.status, 200);
-  assert.match((await response.json()).prompt, /预约成功/);
+  assert.match((await response.json()).prompt, /Booking confirmed/);
   const booked = listBookings().find((booking) => booking.source === "phone")!;
   assert.ok(booked);
   assert.equal(booked.courtId, 2);
@@ -378,7 +435,10 @@ test("a raw combined date, time, and duration reaches review without a court que
     assert.equal(response.status, 200);
     const reply = await response.json();
     assert.equal(reply.context.step, step);
-    assert.doesNotMatch(reply.prompt, /请选择一号或二号|想订一号场还是二号场/);
+    assert.doesNotMatch(
+      reply.prompt,
+      /choose (?:a|which|between).*court|(?:which|what) court/i,
+    );
     assert.equal(listBookings().length, 0);
   }
   assert.equal(call.state().date, "2099-12-02");
@@ -389,7 +449,7 @@ test("a raw combined date, time, and duration reaches review without a court que
   const response = await confirmation.response();
   assert.equal(response.status, 200);
   const receipt = await response.json();
-  assert.match(receipt.prompt, /预约成功/);
+  assert.match(receipt.prompt, /Booking confirmed/);
   assert.equal(listBookings().length, 1);
   assert.equal(listBookings()[0].startsAt, "2099-12-02T05:00:00Z");
   assert.equal(listBookings()[0].durationHours, 2);
@@ -424,7 +484,10 @@ for (const invalidSchedule of [
       ["date", "hour", "duration"].includes(clarification.context.step),
       "an invalid supplied schedule must require clarification",
     );
-    assert.doesNotMatch(clarification.prompt, /预约成功|请.*确认|按1确认/);
+    assert.doesNotMatch(
+      clarification.prompt,
+      /Booking confirmed|Please review:|press 1 to confirm/i,
+    );
     assert.equal(listBookings().length, 0);
     assert.equal(smsCount(), 0);
     assert.deepEqual(
@@ -456,14 +519,17 @@ for (const invalidSchedule of [
     assert.equal(call.state().hour, "16");
     assert.equal(call.state().duration, 2);
     assert.equal(call.state().court, 1);
-    assert.doesNotMatch(review.prompt, /请选择一号或二号|想订一号场还是二号场/);
+    assert.doesNotMatch(
+      review.prompt,
+      /choose (?:a|which|between).*court|(?:which|what) court/i,
+    );
     assert.equal(listBookings().length, 0);
     assert.equal(smsCount(), 0);
     const confirmation = call.send("确认预约");
     const confirmed = await confirmation.response();
     assert.equal(confirmed.status, 200);
     const receipt = await confirmed.json();
-    assert.match(receipt.prompt, /预约成功/);
+    assert.match(receipt.prompt, /Booking confirmed/);
     assert.equal(listBookings().length, 1);
     assert.equal(listBookings()[0].startsAt, "2099-12-02T05:00:00Z");
     assert.equal(listBookings()[0].durationHours, 2);
@@ -483,8 +549,8 @@ test("a last-second court conflict presents the other court for a fresh confirma
   const review = await response.json();
   assert.equal(review.context.step, "confirm");
   assert.equal(call.state().court, 2);
-  assert.match(review.prompt, /2号场/);
-  assert.doesNotMatch(review.prompt, /预约成功/);
+  assert.match(review.prompt, /Court 2/);
+  assert.doesNotMatch(review.prompt, /Booking confirmed/);
   assert.equal(
     listBookings().length,
     1,
@@ -494,7 +560,7 @@ test("a last-second court conflict presents the other court for a fresh confirma
   assert.equal(listBookings().length, 1);
   const confirmed = await call.send("确认预约").response();
   assert.equal(confirmed.status, 200);
-  assert.match((await confirmed.json()).prompt, /预约成功/);
+  assert.match((await confirmed.json()).prompt, /Booking confirmed/);
   assert.equal(listBookings().length, 2);
   assert.equal(
     listBookings().find((booking) => booking.source === "phone")?.courtId,
@@ -514,10 +580,13 @@ test("when both courts become busy Realtime asks for another time and reviews it
   assert.equal(call.state().hour, undefined);
   assert.equal(call.state().court, undefined);
   assert.equal(call.state().duration, 3);
-  assert.match(unavailable.prompt, /空档|可.*时间|可.*开始/);
+  assert.match(
+    unavailable.prompt,
+    /Neither court is available for the full booking\. Please choose another start time\./,
+  );
   assert.doesNotMatch(
     unavailable.prompt,
-    /请选择一号或二号|想订一号场还是二号场/,
+    /choose (?:a|which|between).*court|(?:which|what) court/i,
   );
   assert.equal(listBookings().length, 2);
   assert.deepEqual(
@@ -530,7 +599,7 @@ test("when both courts become busy Realtime asks for another time and reviews it
   assert.equal(review.context.step, "confirm");
   assert.equal(call.state().hour, "18");
   assert.equal(call.state().court, 1);
-  assert.match(review.prompt, /1号场/);
+  assert.match(review.prompt, /Court 1/);
   assert.equal(
     listBookings().length,
     2,
@@ -538,7 +607,7 @@ test("when both courts become busy Realtime asks for another time and reviews it
   );
   const confirmed = await call.send("确认预约").response();
   assert.equal(confirmed.status, 200);
-  assert.match((await confirmed.json()).prompt, /预约成功/);
+  assert.match((await confirmed.json()).prompt, /Booking confirmed/);
   assert.equal(listBookings().length, 3);
   const booked = listBookings().find((booking) => booking.source === "phone")!;
   assert.equal(booked.courtId, 1);
@@ -590,7 +659,7 @@ test("an authenticated reschedule ignores its own overlap across midnight and up
   const response = await confirmation.response();
   assert.equal(response.status, 200);
   const receipt = await response.json();
-  assert.match(receipt.prompt, /已修改/);
+  assert.match(receipt.prompt, /Booking changed/);
   const updated = getBooking(original.booking.id, original.accessCode);
   assert.equal(listBookings().length, 1);
   assert.equal(updated.id, original.booking.id);
@@ -634,7 +703,7 @@ test("raw Realtime booking accepts matching relative and calendar dates and asks
   assert.equal(dateReply.context.step, "hour");
   assert.doesNotMatch(
     dateReply.prompt,
-    /请选择一号或二号|想订一号场还是二号场/,
+    /choose (?:a|which|between).*court|(?:which|what) court/i,
   );
   assert.equal(dateReply.context.date, "2026-11-13");
   assert.equal(call.state().date, "2026-11-13");
@@ -658,7 +727,7 @@ test("raw Realtime booking accepts matching relative and calendar dates and asks
   const committed = await confirmation.response();
   assert.equal(committed.status, 200);
   const receipt = await committed.json();
-  assert.match(receipt.prompt, /预约成功/);
+  assert.match(receipt.prompt, /Booking confirmed/);
   assert.equal(listBookings().length, 1);
   assert.equal(listBookings()[0].startsAt, "2026-11-13T04:00:00Z");
   assert.deepEqual(await (await confirmation.response()).json(), receipt);
@@ -701,7 +770,7 @@ test("spoken prompts decode XML entities without corrupting a caller's name", as
   const summary = await call.send("使用来电号码").response();
   assert.equal(summary.status, 200);
   const result = await summary.json();
-  assert.match(result.prompt, /预约人O'Neil/);
+  assert.match(result.prompt, /Booking name: O'Neil/);
   assert.doesNotMatch(result.prompt, /&apos;|<Say|<Gather/);
   assert.equal(listBookings().length, 0);
 });

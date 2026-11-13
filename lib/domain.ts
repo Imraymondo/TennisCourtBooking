@@ -1,7 +1,7 @@
 export const TIME_ZONE = "Australia/Sydney";
 export const COURTS = [
-  { id: 1, name: "一号球场", subtitle: "COURT ONE" },
-  { id: 2, name: "二号球场", subtitle: "COURT TWO" },
+  { id: 1, name: "Court 1", subtitle: "COURT ONE" },
+  { id: 2, name: "Court 2", subtitle: "COURT TWO" },
 ] as const;
 
 export type Channel = "web" | "phone" | "sms" | "email" | "staff";

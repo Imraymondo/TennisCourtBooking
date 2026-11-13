@@ -18,25 +18,27 @@ import {
 } from "@/lib/domain";
 
 const sources: Record<Channel, string> = {
-  web: "网页",
-  phone: "电话",
-  sms: "短信",
-  email: "邮件",
-  staff: "工作人员",
+  web: "Web",
+  phone: "Phone",
+  sms: "SMS",
+  email: "Email",
+  staff: "Staff",
 };
 
 const attendanceLabels: Record<AttendanceCallSummary["status"], string> = {
-  requesting: "正在提交拨号请求…",
-  queued: "拨号已排队，等待接通。",
-  ringing: "正在振铃，等待客户接听…",
-  "in-progress": "通话中，等待客户确认到场。",
-  attending: "已确认到场。",
-  cancelled: "到场结果已更新，请刷新预约状态。",
-  unanswered: "未接听，预约保留。",
-  completed: "通话已结束，未确认到场，预约保留。",
-  failed: "拨号失败，预约保留。",
-  unknown: "拨号状态待确认，请勿重复拨打。",
-  stale: "预约已变更，此次电话不再确认当前预约。",
+  requesting: "Requesting a call…",
+  queued: "Call queued. Waiting to connect.",
+  ringing: "Ringing. Waiting for the customer to answer…",
+  "in-progress": "Call in progress. Waiting for attendance confirmation.",
+  attending: "Attendance confirmed.",
+  cancelled: "Attendance updated. Refresh to see the booking status.",
+  unanswered: "No answer. The booking remains confirmed.",
+  completed:
+    "Call ended without attendance confirmation. The booking remains confirmed.",
+  failed: "Call failed. The booking remains confirmed.",
+  unknown: "Call status is unknown. Refresh the schedule before trying again.",
+  stale:
+    "The booking has changed. This call does not confirm the current booking.",
 };
 
 class RequestError extends Error {
@@ -55,19 +57,20 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
   const data = await response.json().catch(() => {
-    if (response.ok) throw new Error("服务器响应不完整，请重试。");
+    if (response.ok)
+      throw new Error("The server response was incomplete. Please try again.");
     return {};
   });
   if (!response.ok)
     throw new RequestError(
-      data.error || "请求失败，请稍后重试。",
+      data.error || "The request failed. Please try again later.",
       response.status,
     );
   return data as T;
 }
 
 function localStart(iso: string) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
+  const parts = new Intl.DateTimeFormat("en-AU", {
     timeZone: TIME_ZONE,
     year: "numeric",
     month: "2-digit",
@@ -82,7 +85,7 @@ function localStart(iso: string) {
 }
 
 function prettyTime(iso: string) {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat("en-AU", {
     timeZone: TIME_ZONE,
     month: "numeric",
     day: "numeric",
@@ -95,18 +98,19 @@ function prettyTime(iso: string) {
 function attendanceStatus(booking: Booking, call?: AttendanceCallSummary) {
   if (booking.status === "cancelled") {
     return call?.status === "cancelled"
-      ? "已确认不能到场，预约已取消。"
-      : "预约已取消。";
+      ? "The customer cannot attend. The booking has been cancelled."
+      : "The booking has been cancelled.";
   }
   if (call) {
     if (call.status === "stale" || call.bookingVersion !== booking.version)
-      return "预约已变更，此次电话不再确认当前预约。";
+      return "The booking has changed. This call does not confirm the current booking.";
     return attendanceLabels[call.status];
   }
-  if (!booking.phone.trim()) return "未填写电话，无法电话确认。";
+  if (!booking.phone.trim())
+    return "Add a phone number to confirm attendance by phone.";
   if (new Date(booking.startsAt).getTime() <= Date.now())
-    return "预约已开始，无法电话确认。";
-  return "拨打客户电话，询问是否按时到场。";
+    return "The booking has already started. Attendance calls are unavailable.";
+  return "Call the customer to confirm they will attend on time.";
 }
 
 export default function AdminConsole({ initialDate }: { initialDate: string }) {
@@ -209,7 +213,9 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
         if (err instanceof RequestError && err.status === 401) {
           expireSession();
         }
-        setError(err instanceof Error ? err.message : "读取预约失败。");
+        setError(
+          err instanceof Error ? err.message : "Unable to load bookings.",
+        );
       }
     };
     void load();
@@ -235,7 +241,7 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
       setPassword("");
       setAuthenticated(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "登录失败。");
+      setError(err instanceof Error ? err.message : "Unable to sign in.");
     } finally {
       setLoginBusy(false);
     }
@@ -247,13 +253,13 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
       await api("/api/admin/logout", { method: "POST", body: "{}" });
       expireSession();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "退出失败。");
+      setError(err instanceof Error ? err.message : "Unable to sign out.");
     }
   }
 
   const saved = useCallback(() => {
     setRefreshKey((value) => value + 1);
-    setNotice("预约已保存，场地日程已更新。");
+    setNotice("Booking saved. The court schedule has been updated.");
   }, []);
 
   async function cancel(booking: Booking) {
@@ -266,9 +272,13 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
       });
       setCancelId(null);
       setRefreshKey((value) => value + 1);
-      setNotice(`预约 ${booking.id} 已取消，时段重新开放。`);
+      setNotice(
+        `Booking ${booking.id} cancelled. The time slot is available again.`,
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "取消失败。");
+      setError(
+        err instanceof Error ? err.message : "Unable to cancel the booking.",
+      );
       if (err instanceof RequestError && err.status === 409) {
         setRefreshKey((value) => value + 1);
         setCancelId(null);
@@ -325,13 +335,13 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
         !Object.hasOwn(attendanceLabels, result.status) ||
         typeof result.canRetry !== "boolean"
       )
-        throw new Error("拨号请求返回结果不完整。");
+        throw new Error("The call response was incomplete.");
       callRequests.current.delete(booking.id);
       setAttendanceCalls((previous) => ({
         ...previous,
         [booking.id]: result,
       }));
-      setNotice(`预约 ${booking.id}：拨号请求已提交。`);
+      setNotice(`Booking ${booking.id}: attendance call requested.`);
       setRefreshKey((value) => value + 1);
     } catch (err) {
       if (err instanceof RequestError && err.status === 401) {
@@ -350,7 +360,8 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
       } else {
         setCallIssues((previous) => ({
           ...previous,
-          [booking.id]: "拨号请求结果待确认。可刷新状态或重试同一请求。",
+          [booking.id]:
+            "The call request could not be confirmed. Refresh the schedule to check its status, or try again.",
         }));
         setRefreshKey((value) => value + 1);
       }
@@ -365,36 +376,39 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
     <main className="admin-shell">
       <header className="admin-header">
         <Link href="/" className="admin-brand">
-          COURTSIDE<span>工作人员控制台</span>
+          COURTSIDE<span>Staff console</span>
         </Link>
         <div className="admin-header-actions">
-          <Link href="/">返回预约首页 ↗</Link>
+          <Link href="/">Back to booking ↗</Link>
           {authenticated && (
             <button
               type="button"
               className="admin-button admin-button-subtle"
               onClick={logout}
             >
-              退出登录
+              Sign out
             </button>
           )}
         </div>
       </header>
       {authenticated === null ? (
         <p className="admin-loading" role="status">
-          正在检查登录状态…
+          Checking your session…
         </p>
       ) : !authenticated ? (
         <section className="admin-login">
           <p className="admin-kicker">STAFF ACCESS</p>
           <h1>
-            让每一场预约，
+            Keep every booking
             <br />
-            都有条不紊。
+            running smoothly.
           </h1>
-          <p>登录后查看联系方式，管理来自网页、电话、短信和邮件的预约。</p>
+          <p>
+            Sign in to view contact details and manage bookings from the web,
+            phone, SMS and email.
+          </p>
           <form onSubmit={login}>
-            <label htmlFor="staff-password">工作人员密码</label>
+            <label htmlFor="staff-password">Staff password</label>
             <input
               id="staff-password"
               name="password"
@@ -407,13 +421,11 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
               onChange={(event) => setPassword(event.target.value)}
             />
             <button className="admin-button" disabled={loginBusy}>
-              {loginBusy ? "正在登录…" : "登录控制台 →"}
+              {loginBusy ? "Signing in…" : "Sign in →"}
             </button>
           </form>
           <p className="admin-login-help">
-            生产环境请配置
-            ADMIN_PASSWORD。开发环境首次启动后，初始密码保存在服务器的{" "}
-            <code>.data/admin-password</code> 文件中，请向环境管理员获取。
+            Ask your club administrator for the staff password.
           </p>
           {error && (
             <p className="admin-error" role="alert">
@@ -426,16 +438,19 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
           <section className="admin-intro">
             <div>
               <p className="admin-kicker">THE DAILY COURT REPORT</p>
-              <h1>场地预约管理</h1>
-              <p>两片球场 · 每周七天，全天开放 · 悉尼时间</p>
+              <h1>Court bookings</h1>
+              <p>Two courts · Open 24/7 · Sydney time</p>
             </div>
             <button className="admin-button" onClick={() => setEditor({})}>
-              ＋ 新建预约
+              ＋ New booking
             </button>
           </section>
-          <section className="admin-toolbar" aria-label="预约日期筛选">
+          <section
+            className="admin-toolbar"
+            aria-label="Filter bookings by date"
+          >
             <label htmlFor="admin-date">
-              查看日期{" "}
+              View date{" "}
               <input
                 id="admin-date"
                 type="date"
@@ -454,9 +469,12 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
               className="admin-button admin-button-subtle"
               onClick={() => setRefreshKey((value) => value + 1)}
             >
-              刷新日程 ↻
+              Refresh schedule ↻
             </button>
-            <span>每 30 秒自动更新 · 联系方式仅工作人员可见</span>
+            <span>
+              Updates every 30 seconds · Contact details are visible to staff
+              only
+            </span>
           </section>
           {error && (
             <p className="admin-error" role="alert">
@@ -480,7 +498,10 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
                   <p className="admin-kicker">{court.subtitle}</p>
                   <h2>
                     {court.name}
-                    <span>{confirmed.length} 笔有效预约</span>
+                    <span>
+                      {confirmed.length} active{" "}
+                      {confirmed.length === 1 ? "booking" : "bookings"}
+                    </span>
                   </h2>
                   <p>
                     {confirmed.length
@@ -490,7 +511,7 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
                               `${prettyTime(booking.startsAt)} ${booking.customerName}`,
                           )
                           .join(" · ")
-                      : "暂无有效预约，全天可预订"}
+                      : "No active bookings. Available all day."}
                   </p>
                 </section>
               );
@@ -498,30 +519,37 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
           </div>
           <section className="admin-list" aria-labelledby="admin-list-title">
             <div className="admin-list-heading">
-              <h2 id="admin-list-title">当日预约记录</h2>
-              <span>{visibleBookings.length} 笔 · 包含跨日预约和取消记录</span>
+              <h2 id="admin-list-title">Bookings for the day</h2>
+              <span>
+                {visibleBookings.length}{" "}
+                {visibleBookings.length === 1 ? "booking" : "bookings"} ·
+                Includes overnight bookings and cancellations
+              </span>
             </div>
             {loadedDate !== date ? (
               <p className="admin-empty" role="status">
-                正在读取预约…
+                Loading bookings…
               </p>
             ) : visibleBookings.length === 0 ? (
               <div className="admin-empty">
                 <span>○</span>
-                <h3>这一天还没有预约</h3>
-                <p>客户的新预约会显示在这里，也可由工作人员代为创建。</p>
+                <h3>No bookings for this day</h3>
+                <p>
+                  New customer bookings appear here. Staff can also create a
+                  booking on their behalf.
+                </p>
               </div>
             ) : (
               <div className="admin-table-wrap">
                 <table className="admin-table">
                   <thead>
                     <tr>
-                      <th scope="col">预约 / 球场</th>
-                      <th scope="col">时间</th>
-                      <th scope="col">预约人</th>
-                      <th scope="col">联系方式</th>
-                      <th scope="col">来源 / 状态</th>
-                      <th scope="col">操作</th>
+                      <th scope="col">Booking / Court</th>
+                      <th scope="col">Time</th>
+                      <th scope="col">Customer</th>
+                      <th scope="col">Contact details</th>
+                      <th scope="col">Source / Status</th>
+                      <th scope="col">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -555,8 +583,9 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
                           <td>
                             {prettyTime(booking.startsAt)}
                             <small>
-                              至 {prettyTime(booking.endsAt)} ·{" "}
-                              {booking.durationHours} 小时
+                              to {prettyTime(booking.endsAt)} ·{" "}
+                              {booking.durationHours}{" "}
+                              {booking.durationHours === 1 ? "hour" : "hours"}
                             </small>
                           </td>
                           <td>{booking.customerName}</td>
@@ -568,56 +597,60 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
                             <span>{sources[booking.source]}</span>
                             <span className={`admin-status ${booking.status}`}>
                               {booking.status === "confirmed"
-                                ? "已确认"
-                                : "已取消"}
+                                ? "Confirmed"
+                                : "Cancelled"}
                             </span>
                           </td>
                           <td>
                             {booking.status === "confirmed" ? (
                               cancelId === booking.id ? (
                                 <div className="admin-cancel-confirm">
-                                  <p>确认取消此预约？</p>
+                                  <p>Cancel this booking?</p>
                                   <button
                                     className="admin-text-button admin-danger"
                                     disabled={cancelBusy}
                                     onClick={() => cancel(booking)}
                                   >
-                                    {cancelBusy ? "正在取消…" : "确认取消"}
+                                    {cancelBusy
+                                      ? "Cancelling…"
+                                      : "Confirm cancellation"}
                                   </button>
                                   <button
                                     className="admin-text-button"
                                     disabled={cancelBusy}
                                     onClick={() => setCancelId(null)}
                                   >
-                                    保留预约
+                                    Keep booking
                                   </button>
                                 </div>
                               ) : (
                                 <div className="admin-row-actions">
                                   <button
                                     className="admin-text-button"
-                                    aria-label={`修改预约 ${booking.id}`}
+                                    aria-label={`Edit booking ${booking.id}`}
                                     onClick={() => setEditor({ booking })}
                                   >
-                                    修改
+                                    Edit
                                   </button>
                                   <button
                                     className="admin-text-button admin-danger"
-                                    aria-label={`取消预约 ${booking.id}`}
+                                    aria-label={`Cancel booking ${booking.id}`}
                                     onClick={() => setCancelId(booking.id)}
                                   >
-                                    取消
+                                    Cancel
                                   </button>
                                 </div>
                               )
                             ) : (
-                              <span className="admin-muted">已释放时段</span>
+                              <span className="admin-muted">
+                                Time slot released
+                              </span>
                             )}
                             <div className="admin-attendance-action">
                               <button
                                 type="button"
                                 className="admin-attendance-button"
-                                aria-label={`电话确认到场：${booking.customerName}，预约 ${booking.id}`}
+                                aria-label={`Call to confirm attendance for ${booking.customerName}, booking ${booking.id}`}
                                 aria-describedby={`attendance-status-${booking.id}`}
                                 disabled={
                                   !canCall ||
@@ -627,8 +660,8 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
                                 onClick={() => confirmAttendance(booking)}
                               >
                                 {isCallPending
-                                  ? "正在请求拨号…"
-                                  : "电话确认到场"}
+                                  ? "Requesting call…"
+                                  : "Call to confirm attendance"}
                               </button>
                               <p
                                 id={`attendance-status-${booking.id}`}
@@ -649,7 +682,9 @@ export default function AdminConsole({ initialDate }: { initialDate: string }) {
             )}
           </section>
           <p className="admin-footer-note">
-            已确认预约的姓名会显示在公开日程中；电话、邮箱和来源仅在工作人员控制台显示。修改与取消均实时检查预约版本和场地冲突。
+            Customer names for confirmed bookings appear on the public schedule.
+            Phone numbers, email addresses and booking sources are visible to
+            staff only.
           </p>
           {editor && (
             <BookingEditor
@@ -713,7 +748,7 @@ function BookingEditor({
     event.preventDefault();
     setError("");
     if (!phone.trim() && !email.trim()) {
-      setError("请至少填写一种联系方式：电话或邮箱。");
+      setError("Enter at least one contact method: phone or email.");
       return;
     }
     setBusy(true);
@@ -743,10 +778,12 @@ function BookingEditor({
         onSaved();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败。");
+      setError(
+        err instanceof Error ? err.message : "Unable to save the booking.",
+      );
       if (err instanceof RequestError && err.status === 409)
         setError(
-          `${err.message} 请关闭窗口、刷新日程后重新操作，当前内容尚未保存。`,
+          `${err.message} Close this window and refresh the schedule before trying again. Your changes have not been saved.`,
         );
       if (err instanceof RequestError && err.status === 401) onExpired();
     } finally {
@@ -767,7 +804,7 @@ function BookingEditor({
       <button
         type="button"
         className="admin-dialog-close"
-        aria-label="关闭预约窗口"
+        aria-label="Close booking dialog"
         disabled={busy}
         onClick={onClose}
       >
@@ -775,24 +812,25 @@ function BookingEditor({
       </button>
       <p className="admin-kicker">COURTSIDE / RESERVATIONS</p>
       <h2 id="admin-editor-title">
-        {created ? "预约已创建" : booking ? "修改预约" : "新建预约"}
+        {created ? "Booking created" : booking ? "Edit booking" : "New booking"}
       </h2>
       {created ? (
         <div className="admin-created">
           <p>
-            已成功保存，请将以下凭据安全交给预约人。管理码仅在本次创建时显示。
+            Booking saved. Share these details securely with the customer. The
+            access code is shown only once.
           </p>
           <dl>
             <div>
-              <dt>预约编号</dt>
+              <dt>Booking ID</dt>
               <dd>{created.booking.id}</dd>
             </div>
             <div>
-              <dt>管理码</dt>
+              <dt>Access code</dt>
               <dd>{created.accessCode}</dd>
             </div>
             <div>
-              <dt>场地 / 时间</dt>
+              <dt>Court / Time</dt>
               <dd>
                 {
                   COURTS.find((court) => court.id === created.booking.courtId)
@@ -805,20 +843,20 @@ function BookingEditor({
             </div>
           </dl>
           <button type="button" className="admin-button" onClick={onClose}>
-            已保存凭据，返回日程
+            Details saved. Back to schedule
           </button>
         </div>
       ) : (
         <form onSubmit={submit} className="admin-editor-form">
           <p>
-            所有时间为悉尼时间，每片球场全天开放。开始时间为整点，默认预约 2
-            小时。
+            All times are in Sydney time. Both courts are open 24/7. Bookings
+            start on the hour and default to 2 hours.
           </p>
           <div className="admin-form-grid">
             <label>
-              球场
+              Court
               <select
-                aria-label="球场"
+                aria-label="Court"
                 value={courtId}
                 onChange={(event) => setCourtId(Number(event.target.value))}
               >
@@ -830,9 +868,9 @@ function BookingEditor({
               </select>
             </label>
             <label>
-              来源
+              Source
               <select
-                aria-label="来源"
+                aria-label="Source"
                 value={source}
                 disabled={!!booking}
                 onChange={(event) => setSource(event.target.value as Channel)}
@@ -843,22 +881,22 @@ function BookingEditor({
                   </option>
                 ))}
               </select>
-              {booking && <small>保留预约的原始来源</small>}
+              {booking && <small>The original booking source is kept</small>}
             </label>
             <label>
-              日期
+              Date
               <input
                 type="date"
                 value={date}
-                aria-label="日期"
+                aria-label="Date"
                 required
                 onChange={(event) => setDate(event.target.value)}
               />
             </label>
             <label>
-              开始时间
+              Start time
               <select
-                aria-label="开始时间"
+                aria-label="Start time"
                 value={hour}
                 onChange={(event) => setHour(event.target.value)}
               >
@@ -872,9 +910,9 @@ function BookingEditor({
               </select>
             </label>
             <label>
-              预约时长
+              Duration
               <select
-                aria-label="预约时长"
+                aria-label="Duration"
                 value={durationHours}
                 onChange={(event) =>
                   setDurationHours(Number(event.target.value))
@@ -883,14 +921,15 @@ function BookingEditor({
                 {Array.from({ length: 8 }, (_, index) => index + 1).map(
                   (value) => (
                     <option key={value} value={value}>
-                      {value} 小时{value === 2 ? "（默认）" : ""}
+                      {value} {value === 1 ? "hour" : "hours"}
+                      {value === 2 ? " (default)" : ""}
                     </option>
                   ),
                 )}
               </select>
             </label>
             <label>
-              预约人姓名
+              Customer name
               <input
                 value={name}
                 required
@@ -900,7 +939,7 @@ function BookingEditor({
               />
             </label>
             <label>
-              电话
+              Phone
               <input
                 type="tel"
                 value={phone}
@@ -910,7 +949,7 @@ function BookingEditor({
               />
             </label>
             <label>
-              邮箱
+              Email
               <input
                 type="email"
                 value={email}
@@ -921,7 +960,9 @@ function BookingEditor({
             </label>
           </div>
           <p className="admin-form-help">
-            电话和邮箱至少填写一项。客户姓名会显示在公开日程上，请先向客户说明；联系方式仅工作人员可见。
+            Enter a phone number or email address. Let the customer know their
+            name will appear on the public schedule. Contact details are visible
+            to staff only.
           </p>
           {error && (
             <p className="admin-error" role="alert">
@@ -935,10 +976,10 @@ function BookingEditor({
               disabled={busy}
               onClick={onClose}
             >
-              返回
+              Back
             </button>
             <button className="admin-button" disabled={busy}>
-              {busy ? "正在保存…" : booking ? "保存修改" : "确认创建"}
+              {busy ? "Saving…" : booking ? "Save changes" : "Create booking"}
             </button>
           </div>
         </form>

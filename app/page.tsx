@@ -4,7 +4,7 @@ import { TIME_ZONE } from "@/lib/domain";
 export const dynamic = "force-dynamic";
 
 export default function Home() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
+  const parts = new Intl.DateTimeFormat("en-AU", {
     timeZone: TIME_ZONE,
     year: "numeric",
     month: "2-digit",

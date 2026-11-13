@@ -129,7 +129,7 @@ test("past reservations are rejected unless deliberately inspecting historical t
 });
 
 test("today is derived in the club timezone instead of the execution host timezone", () => {
-  const parts = new Intl.DateTimeFormat("en-CA", {
+  const parts = new Intl.DateTimeFormat("en-AU", {
     timeZone: "Australia/Sydney",
     year: "numeric",
     month: "2-digit",

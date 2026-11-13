@@ -15,12 +15,17 @@ export function apiError(error: unknown): Response {
   if (error instanceof AppError)
     return json({ error: error.message }, error.status);
   if (error instanceof SyntaxError)
-    return json({ error: "请求内容不是有效的 JSON" }, 400);
+    return json({ error: "The request body is not valid JSON." }, 400);
   console.error(
     "Booking API failed:",
     error instanceof Error ? error.name : "UnknownError",
   );
-  return json({ error: "服务暂时不可用，请稍后重试" }, 500);
+  return json(
+    {
+      error: "The service is temporarily unavailable. Please try again later.",
+    },
+    500,
+  );
 }
 
 export function ensureSameOrigin(request: Request): void {
@@ -35,11 +40,11 @@ export function ensureSameOrigin(request: Request): void {
     // port, rather than that internal URL. Forwarded hosts are not trusted here;
     // deployments behind a proxy can explicitly configure APP_BASE_URL.
     if (!host || /[\s/@\\?#]/.test(host))
-      throw new AppError("请求来源不受允许", 403);
+      throw new AppError("This request origin is not allowed.", 403);
     try {
       actualOrigin = new URL(`${requestUrl.protocol}//${host}`).origin;
     } catch {
-      throw new AppError("请求来源不受允许", 403);
+      throw new AppError("This request origin is not allowed.", 403);
     }
   }
   const allowed = [actualOrigin];
@@ -57,7 +62,8 @@ export function ensureSameOrigin(request: Request): void {
       /* invalid setting grants nothing */
     }
   }
-  if (!allowed.includes(origin)) throw new AppError("请求来源不受允许", 403);
+  if (!allowed.includes(origin))
+    throw new AppError("This request origin is not allowed.", 403);
 }
 
 export async function readJson<T = Record<string, unknown>>(
@@ -69,11 +75,11 @@ export async function readJson<T = Record<string, unknown>>(
       ?.toLowerCase()
       .includes("application/json")
   )
-    throw new AppError("请使用 application/json 请求", 415);
+    throw new AppError("Please send the request as application/json.", 415);
   if (Number(request.headers.get("content-length")) > 16_384)
-    throw new AppError("请求内容过大", 413);
+    throw new AppError("The request body is too large.", 413);
   const reader = request.body?.getReader();
-  if (!reader) throw new AppError("请求内容为空");
+  if (!reader) throw new AppError("The request body is empty.");
   const chunks: Uint8Array[] = [];
   let length = 0;
   try {
@@ -83,7 +89,7 @@ export async function readJson<T = Record<string, unknown>>(
       length += value.byteLength;
       if (length > 16_384) {
         await reader.cancel();
-        throw new AppError("请求内容过大", 413);
+        throw new AppError("The request body is too large.", 413);
       }
       chunks.push(value);
     }
@@ -93,7 +99,7 @@ export async function readJson<T = Record<string, unknown>>(
   const text = Buffer.concat(chunks).toString("utf8");
   const parsed: unknown = JSON.parse(text);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-    throw new AppError("请求内容必须为对象");
+    throw new AppError("The request body must be an object.");
   return parsed as T;
 }
 

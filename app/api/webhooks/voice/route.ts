@@ -38,10 +38,13 @@ export async function POST(request: Request) {
     const form = await verifiedTwilioForm(request);
     const callSid = form.get("CallSid");
     if (!callSid || !/^[A-Za-z0-9]{10,64}$/.test(callSid))
-      throw new AppError("缺少通话编号", 400);
+      throw new AppError("Missing call ID.", 400);
     if (process.env.VOICE_MODE === "realtime") {
       if (!realtimeVoiceEnabled())
-        throw new AppError("实时电话渠道尚未配置", 503);
+        throw new AppError(
+          "The Realtime phone channel is not configured.",
+          503,
+        );
       return xmlResponse(
         runChannelEvent(`voice:${callSid}:initial`, () => {
           rateLimit(`voice:${form.get("From")}`, 200, 3_600_000);

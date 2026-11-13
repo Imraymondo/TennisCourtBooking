@@ -123,7 +123,10 @@ test("an invalid correction invalidates the old confirmation instead of silently
     parsed({ correction: "date", date: "2000-01-01" }),
   ]);
   await flow.send("预约一号场");
-  assert.match(await flow.send("改到过去的日期"), /未来/);
+  assert.match(
+    await flow.send("改到过去的日期"),
+    /Bookings must start in the future\./,
+  );
   assert.match(await flow.send("确认预约"), /尚未完成/);
   assert.equal(listBookings().length, 0);
 });
@@ -144,7 +147,10 @@ test("availability comes from the store and final booking rechecks a newly occup
     customerName: "其他客人",
     phone: OTHER_PHONE,
   });
-  assert.match(await flow.send("确认预约"), /已被预约/);
+  assert.match(
+    await flow.send("确认预约"),
+    /That time slot is already booked\./,
+  );
   assert.equal(listBookings().length, 1);
   assert.match(await flow.send("确认预约"), /尚未完成/);
   assert.match(await flow.send("那改下午五点"), /17:00/);
@@ -277,7 +283,10 @@ test("credentials can precede change details, wrong codes and stale versions can
   const { id } = created.booking;
   const code = created.accessCode;
   const flow = scripted([parsed({ hour: "15" })]);
-  assert.match(await flow.send(`请修改 编号${id} 管理码0000000000`), /不正确/);
+  assert.match(
+    await flow.send(`请修改 编号${id} 管理码0000000000`),
+    /Incorrect booking number or access code\./,
+  );
   assert.match(await flow.send("确认修改"), /尚未完成/);
   assert.match(await flow.send(`请修改 编号${id} 管理码${code}`), /需要修改/);
   assert.match(await flow.send("改成下午三点"), /确认修改/);
@@ -292,7 +301,7 @@ test("credentials can precede change details, wrong codes and stale versions can
     },
     code,
   );
-  assert.match(await flow.send("确认修改"), /已被更新/);
+  assert.match(await flow.send("确认修改"), /This booking has been updated\./);
   assert.equal(getBooking(id, code).version, 2);
   assert.equal(getBooking(id, code).startsAt, "2099-12-01T23:00:00Z");
   const cancelled = executeCommand(`查看 ${id} ${code}`, identity());
@@ -399,7 +408,7 @@ test("change availability excludes the original booking and includes conflicts a
     await flow.send(
       `请修改 编号${created.booking.id} 管理码${created.accessCode} 2099-12-01 23:00 1号场 2小时`,
     ),
-    /已被预约/,
+    /该场地时间段已被预约/,
   );
   assert.match(await flow.send("改到晚上九点"), /确认修改/);
   await flow.send("确认修改");
@@ -412,5 +421,5 @@ test("cached retries do not consume another SMS rate-limit allowance", async () 
   await flow.send("HELP", PHONE, key);
   await flow.send("HELP", PHONE, key);
   for (let count = 1; count < 30; count++) await flow.send("HELP");
-  await assert.rejects(flow.send("HELP"), /过于频繁/);
+  await assert.rejects(flow.send("HELP"), /Too many requests\./);
 });

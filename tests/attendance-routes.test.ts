@@ -332,7 +332,7 @@ test("signed outbound callbacks follow two distinct turns and cancellation repla
   );
   const firstTurn = gatherAction(initialXml);
   const negative = await webhook(
-    signedRequest(firstTurn, { SpeechResult: "不能来" }),
+    signedRequest(firstTurn, { SpeechResult: "I cannot attend" }),
   );
   const confirmationUrl = gatherAction(await negative.text());
   assert.notEqual(confirmationUrl, firstTurn);
@@ -342,7 +342,7 @@ test("signed outbound callbacks follow two distinct turns and cancellation repla
   );
   for (let i = 0; i < 2; i++) {
     const confirmed = await webhook(
-      signedRequest(confirmationUrl, { SpeechResult: "确认取消" }),
+      signedRequest(confirmationUrl, { SpeechResult: "Confirm cancellation" }),
     );
     assert.equal(confirmed.status, 200);
     assert.equal(

@@ -236,8 +236,8 @@ function assertReceipt(
   const body = request.body.get("Body")!;
   assert.equal(body, outbox.body);
   assert.ok(body.includes(booking.customerName));
-  assert.ok(body.includes(`预约编号：${booking.id}。`));
-  assert.ok(body.includes(`管理码：${outbox.accessCode}。`));
+  assert.ok(body.includes(`Booking reference: ${booking.id}.`));
+  assert.ok(body.includes(`Access code: ${outbox.accessCode}.`));
   assert.equal(getBooking(booking.id, outbox.accessCode).id, booking.id);
   return { booking, outbox, body };
 }
@@ -264,13 +264,16 @@ test("Gather confirmation sends its committed receipt to the reviewed contact ex
   assert.equal(booking.courtId, 1);
   assert.equal(booking.durationHours, 2);
   assert.equal(booking.startsAt, "2099-12-01T04:00:00Z");
-  assert.match(body, /一号球场/);
-  assert.match(body, /2099-12-01 15:00至2099-12-01 17:00/);
-  assert.match(body, /共2小时/);
+  assert.match(body, /Court 1/);
+  assert.match(body, /2099-12-01 15:00 to 2099-12-01 17:00/);
+  assert.match(body, /2 hours/);
   assert.equal(outbox.status, "submitted");
   assert.equal(outbox.messageSid, MESSAGE_SID);
   assert.ok(xml.includes(PHONE_SMS_PENDING_PROMPT));
-  assert.doesNotMatch(xml, /预约编号|管理码|短信暂/);
+  assert.doesNotMatch(
+    xml,
+    /Booking reference|Access code|SMS could not be sent/i,
+  );
   assert.ok(!xml.includes(booking.id));
   assert.ok(!xml.includes(outbox.accessCode));
   assert.equal(await (await confirm()).text(), xml);
@@ -299,16 +302,19 @@ test("a rejected Gather SMS keeps the booking and reads each usable fallback cre
     "+61412345678",
   );
   assert.equal(outbox.status, "failed");
-  assert.match(xml, /预约成功，短信暂时发送不了/);
-  assert.equal([...xml.matchAll(/预约编号：/g)].length, 1);
-  assert.equal([...xml.matchAll(/管理码：/g)].length, 1);
-  assert.equal(spokenCredential(xml, "预约编号"), booking.id);
+  assert.match(xml, /Booking confirmed; the SMS could not be sent/);
+  assert.equal([...xml.matchAll(/Booking reference:/g)].length, 1);
+  assert.equal([...xml.matchAll(/Access code:/g)].length, 1);
+  assert.equal(spokenCredential(xml, "Booking reference"), booking.id);
   assert.equal(spokenCredential(xml), outbox.accessCode);
   assert.equal(
     getBooking(booking.id, spokenCredential(xml)).status,
     "confirmed",
   );
-  assert.doesNotMatch(xml, /详情短信正在发送|fake-test-only|Basic /);
+  assert.doesNotMatch(
+    xml,
+    /confirmation SMS is being sent|fake-test-only|Basic /,
+  );
   assert.equal(await (await confirm()).text(), xml);
   assert.equal(calls.length, 1);
   assert.equal(listBookings().length, 1);
@@ -379,12 +385,15 @@ test("the private Realtime route finalizes SMS after confirmation and returns a 
   assert.equal(booking.customerName, "李四");
   assert.equal(booking.courtId, 1);
   assert.equal(booking.durationHours, 3);
-  assert.match(body, /一号球场/);
-  assert.match(body, /2099-12-01 15:00至2099-12-01 18:00/);
+  assert.match(body, /Court 1/);
+  assert.match(body, /2099-12-01 15:00 to 2099-12-01 18:00/);
   assert.equal(outbox.status, "submitted");
   assert.equal(result.context.step, "menu");
   assert.ok(result.prompt.includes(PHONE_SMS_PENDING_PROMPT));
-  assert.doesNotMatch(result.prompt, /预约编号|管理码|<Say|<Response/);
+  assert.doesNotMatch(
+    result.prompt,
+    /Booking reference|Access code|<Say|<Response/,
+  );
   assert.ok(!result.prompt.includes(booking.id));
   assert.ok(!result.prompt.includes(outbox.accessCode));
   assert.deepEqual(await (await post(confirmation)).json(), result);

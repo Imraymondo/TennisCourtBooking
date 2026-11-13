@@ -19,14 +19,17 @@ export async function POST(request: Request, context: Context) {
     ensureSameOrigin(request);
     limitRequest(request, "attendance-call", 30);
     const { id } = await context.params;
-    if (!/^\d{8}$/.test(id)) throw new AppError("预约编号无效", 400);
+    if (!/^\d{8}$/.test(id)) throw new AppError("Invalid booking number.", 400);
     const input = await readJson<{ version: number; requestId: string }>(
       request,
     );
     if (
       Object.keys(input).some((key) => !["version", "requestId"].includes(key))
     )
-      throw new AppError("回访请求包含不支持的字段", 400);
+      throw new AppError(
+        "The attendance call request contains unsupported fields.",
+        400,
+      );
     const attendanceCall = await startAttendanceCall(
       id,
       input.version,

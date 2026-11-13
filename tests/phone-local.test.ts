@@ -115,7 +115,11 @@ test("valid fake settings pass a non-network check without revealing any values"
   assert.equal(result.status, 0, result.output);
   assert.ok(result.output.includes("does not connect"));
   assert.ok(result.output.includes("Booking language: rule-based"));
-  assert.ok(result.output.includes("Voice mode: Twilio Gather"));
+  assert.ok(
+    result.output.includes(
+      "Voice mode: Twilio Gather (English ASR en-AU; Polly.Olivia-Neural)",
+    ),
+  );
   assert.ok(
     result.output.includes(
       "Phone booking SMS: not configured (TWILIO_ACCOUNT_SID is missing).",
@@ -193,7 +197,11 @@ test("empty/off AI test settings override inherited environment values without e
     const result = check();
     assert.equal(result.status, 0, result.output);
     assert.ok(result.output.includes("Booking language: rule-based"));
-    assert.ok(result.output.includes("Voice mode: Twilio Gather"));
+    assert.ok(
+      result.output.includes(
+        "Voice mode: Twilio Gather (English ASR en-AU; Polly.Olivia-Neural)",
+      ),
+    );
     assert.ok(result.output.includes("TWILIO_ACCOUNT_SID is missing"));
     assertPrivate(
       result.output,
@@ -241,7 +249,7 @@ test("Realtime preflight safely reports its model without importing its bridge o
     assert.ok(result.output.includes("Booking language: rule-based"));
     assert.ok(
       result.output.includes(
-        `Voice mode: OpenAI Realtime (model ${model || "gpt-realtime-1.5"})`,
+        `Voice mode: OpenAI Realtime (model ${model || "gpt-realtime-1.5"}; English transcription en)`,
       ),
     );
     assertPrivate(result.output, [
@@ -277,7 +285,7 @@ test("Realtime voice and transcription defaults or supported overrides pass a lo
     assert.equal(result.status, 0, result.output);
     assert.ok(
       result.output.includes(
-        "Voice mode: OpenAI Realtime (model gpt-realtime-1.5)",
+        "Voice mode: OpenAI Realtime (model gpt-realtime-1.5; English transcription en)",
       ),
     );
     assertPrivate(result.output);

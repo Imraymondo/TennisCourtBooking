@@ -163,7 +163,7 @@ function safeEqual(a: string, b: string) {
 
 function authorizedRow(id: string, accessCode?: string, admin = false): Row {
   if (typeof id !== "string" || !/^\d{8}$/.test(id))
-    throw new AppError("预约编号或管理码不正确", 404);
+    throw new AppError("Incorrect booking number or access code.", 404);
   const row = getDatabase()
     .prepare("SELECT * FROM bookings WHERE id = ?")
     .get(id) as Row | undefined;
@@ -174,45 +174,47 @@ function authorizedRow(id: string, accessCode?: string, admin = false): Row {
         !/^\d{10}$/.test(accessCode) ||
         !safeEqual(String(row.access_hash), hash(accessCode))))
   ) {
-    throw new AppError("预约编号或管理码不正确", 404);
+    throw new AppError("Incorrect booking number or access code.", 404);
   }
   return row;
 }
 
 function validatedInput(input: BookingInput) {
-  if (!input || typeof input !== "object") throw new AppError("预约信息无效");
+  if (!input || typeof input !== "object")
+    throw new AppError("Invalid booking details.");
   if (input.courtId !== 1 && input.courtId !== 2)
-    throw new AppError("请选择一号或二号球场");
+    throw new AppError("Please select Court 1 or Court 2.");
   if (
     typeof input.customerName !== "string" ||
     !input.customerName.trim() ||
     input.customerName.trim().length > 80 ||
     /[\x00-\x1f]/.test(input.customerName)
   ) {
-    throw new AppError("姓名需要为 1 至 80 个字符");
+    throw new AppError("Name must be 1 to 80 characters.");
   }
   if (input.email !== undefined && typeof input.email !== "string")
-    throw new AppError("邮箱格式不正确");
+    throw new AppError("Invalid email address.");
   if (input.phone !== undefined && typeof input.phone !== "string")
-    throw new AppError("电话格式不正确");
+    throw new AppError("Invalid phone number.");
   const email = (input.email || "").trim();
   const phone = (input.phone || "").trim();
   if (
     email.length > 254 ||
     (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
   )
-    throw new AppError("邮箱格式不正确");
+    throw new AppError("Invalid email address.");
   if (
     phone.length > 32 ||
     (phone &&
       (!/^\+?[\d ()-]{6,32}$/.test(phone) ||
         phone.replace(/\D/g, "").length < 6))
   )
-    throw new AppError("电话格式不正确");
-  if (!phone && !email) throw new AppError("请至少填写电话或邮箱");
+    throw new AppError("Invalid phone number.");
+  if (!phone && !email)
+    throw new AppError("Please provide a phone number or email address.");
   const source = input.source ?? "web";
   if (!["web", "phone", "sms", "email", "staff"].includes(source))
-    throw new AppError("预约来源无效");
+    throw new AppError("Invalid booking source.");
   return {
     courtId: input.courtId,
     customerName: input.customerName.trim(),
@@ -235,8 +237,7 @@ function assertNoOverlap(
       "SELECT id FROM bookings WHERE court_id = ? AND status = 'confirmed' AND starts_at < ? AND ends_at > ? AND id != ? LIMIT 1",
     )
     .get(courtId, endsAt, startsAt, excluding);
-  if (conflict)
-    throw new AppError("该场地时间段已被预约，请选择其他时间或球场", 409);
+  if (conflict) throw new AppError("That time slot is already booked.", 409);
 }
 
 export function createBooking(input: BookingInput): {
@@ -287,7 +288,9 @@ export function getBooking(
 
 function validateVersion(version: unknown) {
   if (typeof version !== "number" || !Number.isInteger(version) || version < 1)
-    throw new AppError("预约版本无效，请刷新后重试");
+    throw new AppError(
+      "Invalid booking version. Please refresh and try again.",
+    );
 }
 
 export function updateBooking(
@@ -301,9 +304,12 @@ export function updateBooking(
   return transaction((db) => {
     const old = authorizedRow(id, accessCode, admin);
     if (old.status === "cancelled")
-      throw new AppError("已取消的预约无法修改", 409);
+      throw new AppError("Cancelled bookings cannot be changed.", 409);
     if (Number(old.version) !== input.version)
-      throw new AppError("预约已被更新，请刷新后重试", 409);
+      throw new AppError(
+        "This booking has been updated. Please refresh and try again.",
+        409,
+      );
     assertNoOverlap(db, value.courtId, value.startsAt, value.endsAt, id);
     db.prepare(
       "UPDATE bookings SET court_id = ?, customer_name = ?, email = ?, phone = ?, starts_at = ?, ends_at = ?, duration_hours = ?, updated_at = ?, version = version + 1 WHERE id = ?",
@@ -335,7 +341,10 @@ export function cancelBooking(
     const old = authorizedRow(id, accessCode, admin);
     if (old.status === "cancelled") return toBooking(old);
     if (Number(old.version) !== version)
-      throw new AppError("预约已被更新，请刷新后重试", 409);
+      throw new AppError(
+        "This booking has been updated. Please refresh and try again.",
+        409,
+      );
     db.prepare(
       "UPDATE bookings SET status = 'cancelled', updated_at = ?, version = version + 1 WHERE id = ?",
     ).run(new Date().toISOString(), id);
@@ -425,11 +434,11 @@ export function getAvailability(
           occupied,
           maxDurationHours,
           reason: past
-            ? "已过去"
+            ? "Past time"
             : occupied
-              ? "已有预约"
+              ? "Booked"
               : !available
-                ? `空闲不足${durationHours}小时`
+                ? `Less than ${durationHours} hours available`
                 : undefined,
         };
       } catch (error) {
@@ -440,7 +449,7 @@ export function getAvailability(
           available: false,
           occupied: false,
           maxDurationHours: 0,
-          reason: "夏令时无效或重复整点",
+          reason: "Hour missing or repeated due to daylight saving",
         };
       }
     }),
@@ -481,7 +490,7 @@ export function rateLimit(key: string, limit: number, windowMs: number): void {
       ).run(key, now);
     } else {
       if (Number(row.count) >= limit)
-        throw new AppError("操作过于频繁，请稍后再试", 429);
+        throw new AppError("Too many requests. Please try again later.", 429);
       db.prepare("UPDATE rate_limits SET count = count + 1 WHERE key = ?").run(
         key,
       );
@@ -784,20 +793,32 @@ export function reserveAttendanceCall(value: {
         replay.booking_id !== value.bookingId ||
         Number(replay.booking_version) !== value.bookingVersion
       )
-        throw new AppError("请求编号已用于其他预约，请刷新后重试", 409);
+        throw new AppError(
+          "This request ID has been used for another booking. Please refresh and try again.",
+          409,
+        );
       return getAttendanceCall(String(replay.attempt_id))!;
     }
     const booking = getBooking(value.bookingId, undefined, true);
     if (booking.version !== value.bookingVersion)
-      throw new AppError("预约已被更新，请刷新后重试", 409);
+      throw new AppError(
+        "This booking has been updated. Please refresh and try again.",
+        409,
+      );
     if (
       booking.status !== "confirmed" ||
       Date.parse(booking.startsAt) <= Date.now()
     )
-      throw new AppError("只能致电尚未开始的有效预约", 409);
+      throw new AppError(
+        "Attendance calls require a confirmed booking that has not started.",
+        409,
+      );
     const recipient = attendanceRecipient(booking.phone);
     if (!recipient)
-      throw new AppError("预约电话无法拨打，请填写国际号码或澳洲手机号码", 400);
+      throw new AppError(
+        "This booking phone number cannot be called. Please provide an international number or Australian mobile number.",
+        400,
+      );
     const latest = getLatestAttendanceCall(booking.id);
     const existing =
       latest &&
@@ -932,7 +953,7 @@ export function runAttendanceCallEvent(
 ): string {
   return transaction((db) => {
     let value = getAttendanceCall(id);
-    if (!value) throw new AppError("找不到电话确认记录", 404);
+    if (!value) throw new AppError("Attendance call record not found.", 404);
     if (
       identity.accountSid !== value.accountSid ||
       identity.sender !== value.sender ||
@@ -940,14 +961,14 @@ export function runAttendanceCallEvent(
       !/^CA[a-fA-F0-9]{32}$/.test(identity.callSid) ||
       (value.callSid !== null && identity.callSid !== value.callSid)
     )
-      throw new AppError("电话确认身份不匹配", 403);
+      throw new AppError("Attendance call identity does not match.", 403);
     if (!value.callSid) {
       if (!["processing", "unknown"].includes(value.submissionStatus))
-        throw new AppError("电话确认尚未发出", 409);
+        throw new AppError("The attendance call has not been submitted.", 409);
       const used = db
         .prepare("SELECT id FROM attendance_calls WHERE call_sid = ?")
         .get(identity.callSid);
-      if (used) throw new AppError("通话编号已被使用", 403);
+      if (used) throw new AppError("This call ID has already been used.", 403);
       db.prepare(
         "UPDATE attendance_calls SET call_sid = ?, submission_status = 'submitted', updated_at = ? WHERE id = ? AND call_sid IS NULL",
       ).run(identity.callSid, Date.now(), id);

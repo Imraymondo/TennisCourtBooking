@@ -15,8 +15,9 @@ const API_KEY = "local-realtime-test-openai-key";
 const CALL_SID = `CA${"a".repeat(32)}`;
 const STREAM_SID = `MZ${"b".repeat(32)}`;
 const TICKET = "c".repeat(64);
-const WELCOME = "欢迎，请问您要查询还是预约网球场？";
-const NEXT_PROMPT = "请告诉我您的联系电话。";
+const WELCOME =
+  "Welcome. Would you like to check availability or book a court?";
+const NEXT_PROMPT = "What is your contact number?";
 
 type Message = Record<string, unknown>;
 type AppReply = { status?: number; body?: Message };
@@ -502,7 +503,7 @@ test("Twilio start rejects incompatible audio before contacting the app or OpenA
   assert.equal(fixture.outbound.length, 0);
 });
 
-test("GA Realtime uses PCMU, trusted Mandarin transcription and manual responses, forwarding original audio bytes", async (t) => {
+test("GA Realtime uses PCMU, trusted English transcription and manual responses, forwarding original audio bytes", async (t) => {
   const fixture = await setup(t);
   const { twilio, ai, session, greeting } = await fixture.start();
   assert.equal(fixture.outbound.length, 1);
@@ -529,16 +530,16 @@ test("GA Realtime uses PCMU, trusted Mandarin transcription and manual responses
   );
   assert.equal(
     field(session, "session", "audio", "input", "transcription", "language"),
-    "zh",
+    "en",
   );
   assert.equal(
     field(session, "session", "audio", "input", "turn_detection", "type"),
     "server_vad",
   );
   const bookingInstructions = String(field(session, "session", "instructions"));
-  assert.match(bookingInstructions, /不要询问客户选择几号球场/);
-  assert.match(bookingInstructions, /先检查1号场、再检查2号场/);
-  assert.match(bookingInstructions, /不得拆分时段换场/);
+  assert.match(bookingInstructions, /Do not ask the caller to choose a court/);
+  assert.match(bookingInstructions, /check Court 1 first, then Court 2/);
+  assert.match(bookingInstructions, /Never split a booking across courts/);
   assert.equal(
     field(
       session,
@@ -558,11 +559,19 @@ test("GA Realtime uses PCMU, trusted Mandarin transcription and manual responses
   const speechInstructions = String(
     field(greeting, "response", "instructions"),
   );
-  assert.match(speechInstructions, /自然、流畅的普通话/);
-  assert.match(speechInstructions, /不要逐字停顿/);
-  assert.match(speechInstructions, /不重复问题、句子、编号或管理码/);
-  assert.match(speechInstructions, /日期和时间按提示中的中文说法读/);
+  assert.match(speechInstructions, /natural, fluent English/);
+  assert.match(speechInstructions, /without pausing after every word/);
+  assert.match(
+    speechInstructions,
+    /Do not repeat questions, sentences, booking references or access codes/,
+  );
+  assert.match(
+    speechInstructions,
+    /Read dates and times naturally in English as written in the prompt/,
+  );
   assert.equal(JSON.parse(speechInstructions.split("\n").at(-1)!), WELCOME);
+  assert.doesNotMatch(bookingInstructions, /[\p{Script=Han}]/u);
+  assert.doesNotMatch(speechInstructions, /[\p{Script=Han}]/u);
 
   const input = Buffer.from([0, 1, 127, 128, 254, 255]).toString("base64");
   twilio.send({
@@ -597,7 +606,9 @@ test("only a completed required tool turn reaches the engine, retaining the trus
       .length,
     0,
   );
-  const transcript = "帮我安排十二月一日下午三点二号场两个小时，我叫张三。";
+  const transcript =
+    "Please book December first at 3 pm for two hours. My name is Alex.";
+  const fields = interpretation({ court: null, name: "Alex" });
   const { request, response } = await requestTool(ai, transcript);
   assert.deepEqual(field(request, "response", "output_modalities"), ["text"]);
   assert.deepEqual(field(request, "response", "tool_choice"), {
@@ -615,7 +626,7 @@ test("only a completed required tool turn reaches the engine, retaining the trus
     response_id: response.id,
     call_id: "tool_call_1",
     name: "booking_turn",
-    arguments: JSON.stringify(interpretation()),
+    arguments: JSON.stringify(fields),
   });
   await delay(30);
   assert.equal(
@@ -624,14 +635,14 @@ test("only a completed required tool turn reaches the engine, retaining the trus
     0,
   );
   const after = ai.inbox.values.length;
-  completeTool(ai, response);
+  completeTool(ai, response, fields);
   const turn = await fixture.appRequests.wait(
     (value) => value.body.op === "turn",
     "completed private turn",
   );
   assert.equal(turn.body.inputId, "item_user_1");
   assert.equal(turn.body.transcript, transcript);
-  assert.deepEqual(turn.body.interpretation, interpretation());
+  assert.deepEqual(turn.body.interpretation, fields);
   assert.equal(turn.body.callSid, CALL_SID);
   assert.equal(turn.body.streamSid, STREAM_SID);
   const spoken = await ai.inbox.wait(
@@ -644,7 +655,7 @@ test("only a completed required tool turn reaches the engine, retaining the trus
   assert.ok(
     String(field(spoken, "response", "instructions")).includes(NEXT_PROMPT),
   );
-  completeTool(ai, response);
+  completeTool(ai, response, fields);
   ai.send({
     type: "conversation.item.input_audio_transcription.completed",
     item_id: "item_user_1",
@@ -658,8 +669,8 @@ test("only a completed required tool turn reaches the engine, retaining the trus
   );
 });
 
-test("a completed response without tool output sends 我要预定 unchanged to the engine and speaks its date prompt", async (t) => {
-  const datePrompt = "请问您要预订哪一天？";
+test("a completed response without tool output sends an English ASR booking request unchanged to the engine and speaks its date prompt", async (t) => {
+  const datePrompt = "Which date would you like to book?";
   const fixture = await setup(t, (request) => ({
     body: {
       prompt: request.body.op === "start" ? WELCOME : datePrompt,
@@ -672,7 +683,11 @@ test("a completed response without tool output sends 我要预定 unchanged to t
     },
   }));
   const { ai } = await fixture.start();
-  const { response } = await requestTool(ai, "我要预定", "item_raw_booking");
+  const { response } = await requestTool(
+    ai,
+    "I would like to book a court",
+    "item_raw_booking",
+  );
   const after = ai.inbox.values.length;
   ai.send({
     type: "response.done",
@@ -687,7 +702,7 @@ test("a completed response without tool output sends 我要预定 unchanged to t
     callSid: CALL_SID,
     streamSid: STREAM_SID,
     inputId: "item_raw_booking",
-    transcript: "我要预定",
+    transcript: "I would like to book a court",
     interpretation: null,
   });
   const spoken = await ai.inbox.wait(
@@ -1007,7 +1022,7 @@ test("model arguments preserve the trusted ASR and cannot introduce top-level co
   assert.equal(turn.body.confirmed, undefined);
 });
 
-test("raw spoken confirmation bypasses model interpretation and reaches the deterministic engine unchanged", async (t) => {
+test("English spoken confirmation bypasses model interpretation and reaches the deterministic engine unchanged", async (t) => {
   const fixture = await setup(t);
   const { ai, greeting } = await fixture.start();
   ai.send({
@@ -1022,14 +1037,14 @@ test("raw spoken confirmation bypasses model interpretation and reaches the dete
   ai.send({
     type: "conversation.item.input_audio_transcription.completed",
     item_id: "item_confirmation",
-    transcript: "确认预约",
+    transcript: "Yes, confirm the booking",
   });
   const turn = await fixture.appRequests.wait(
     (value) => value.body.op === "turn",
     "raw private confirmation turn",
   );
   assert.equal(turn.body.inputId, "item_confirmation");
-  assert.equal(turn.body.transcript, "确认预约");
+  assert.equal(turn.body.transcript, "Yes, confirm the booking");
   assert.equal(turn.body.interpretation ?? null, null);
   assert.equal(ai.inbox.values.filter(toolCreate).length, 0);
 });
@@ -1245,7 +1260,7 @@ test("an engine result waits for the caller to finish speaking and the next ASR 
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const finalPrompt = "请确认预约日期、时间和来电号码。";
+  const finalPrompt = "Please confirm the date, time and contact number.";
   const fixture = await setup(t, async (request) => {
     if (request.body.op === "turn" && request.body.inputId === "item_user_1")
       await gate;
@@ -1414,7 +1429,9 @@ test("opt-in recovery diagnostics show progress without utterances, tickets or c
     (request) => ({
       body: {
         prompt:
-          request.body.op === "start" ? WELCOME : "您希望哪一天使用球场？",
+          request.body.op === "start"
+            ? WELCOME
+            : "Which date would you like to use the court?",
         context: { step: request.body.op === "start" ? "menu" : "date" },
       },
     }),

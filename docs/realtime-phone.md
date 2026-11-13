@@ -29,11 +29,11 @@ OPENAI_REALTIME_TRANSCRIBE_MODEL=gpt-transcribe
 
 `VOICE_MODE` 只接受 `gather` 或 `realtime`，未设置时继续使用原来的 `gather`。Realtime即使在 `BOOKING_AI_ENABLED=0` 时也需要OpenAI API key。短信可独立用 `BOOKING_AI_ENABLED=1` 启用自然语言理解，`OPENAI_MODEL` 保持Responses API文本模型，例如 `gpt-4.1-mini`；不要把Realtime模型填入该变量。
 
-当前Realtime默认模型为 `gpt-realtime-1.5`，输入转写为 `gpt-transcribe`，转写语言为中文 `zh`。可按账号权限更改各自模型变量；配置通过不代表模型有权限。内置声音可选 `alloy`、`ash`、`ballad`、`coral`、`echo`、`sage`、`shimmer`、`verse`、`marin`、`cedar`，默认 `marin`。
+当前Realtime默认模型为 `gpt-realtime-1.5`，输入转写为 `gpt-transcribe`，转写语言为英语 `en`。可按账号权限更改各自模型变量；配置通过不代表模型有权限。内置声音可选 `alloy`、`ash`、`ballad`、`coral`、`echo`、`sage`、`shimmer`、`verse`、`marin`、`cedar`，默认 `marin`。
 
 电话预约成功后如需确认短信，在现有 `.env.local` 额外填写Twilio控制台中的 `TWILIO_ACCOUNT_SID`（`AC` 后接32位十六进制字符），复用已有 `TWILIO_AUTH_TOKEN` 和支持SMS的 `TWILIO_PHONE_NUMBER`。不要发送SID或密钥到聊天中。缺少SID或格式不正确时，原电话流程仍可使用，成功后编号和管理码各读一次。
 
-工作人员也可在本机 `/admin` 为未来的有效预约手动发起到场确认电话；它使用独立的Twilio中文提示与回答采集，不连接Realtime或OpenAI，也没有定时自动拨号。外呼需要同一Twilio账号的SID、Auth Token、支持Voice的E.164主叫号码和公网HTTPS `APP_BASE_URL`。已有来电接入却缺SID时，只需补到现有 `.env.local` 并停止、重新启动服务；`phone:local` 自动提供ngrok公网地址，无需购买域名。程序从Twilio号码拨打预约中的客户电话，并自动设置 **POST `/api/webhooks/attendance`**，不修改下文的来电Voice URL。试用账号须按控制台要求验证目标号码，外呼按Twilio账号计费。详见[工作人员到场确认电话](local-phone.md#工作人员发起到场确认电话)。
+工作人员也可在本机 `/admin` 为未来的有效预约手动发起到场确认电话；它使用独立的Twilio英语提示与回答采集（`en-AU`，`Polly.Olivia-Neural`），不连接Realtime或OpenAI，也没有定时自动拨号。外呼需要同一Twilio账号的SID、Auth Token、支持Voice的E.164主叫号码和公网HTTPS `APP_BASE_URL`。已有来电接入却缺SID时，只需补到现有 `.env.local` 并停止、重新启动服务；`phone:local` 自动提供ngrok公网地址，无需购买域名。程序从Twilio号码拨打预约中的客户电话，并自动设置 **POST `/api/webhooks/attendance`**，不修改下文的来电Voice URL。试用账号须按控制台要求验证目标号码，外呼按Twilio账号计费。详见[工作人员到场确认电话](local-phone.md#工作人员发起到场确认电话)。
 
 ## 2. 预检并启动
 
@@ -50,7 +50,7 @@ npm run phone:local
 预检应显示：
 
 ```text
-Voice mode: OpenAI Realtime (model gpt-realtime-1.5)
+Voice mode: OpenAI Realtime (model gpt-realtime-1.5; English transcription en)
 ```
 
 `phone:check` 只检查配置存在性和安全格式，不联网、不打开隧道、不消耗OpenAI额度，也不验证密钥、账单、模型访问权限或真实通话。`npm run ai:check` 只检查可选Responses API文本理解，不能用它的成功结果代替Realtime音频测试。
@@ -79,8 +79,8 @@ https://你的隧道域名/api/webhooks/voice
 
 先打开本机网站核对未来日期的空档，再用正常显示号码的手机拨打Twilio号码。试用账户的验证号码和地区权限按Twilio控制台要求处理。电话中的时间统一按 **Australia/Sydney** 解释。
 
-- 查询：“明天下午三点能预约两小时吗？”核对回复与网页空档。
-- 创建：“我要预约明天下午三点。”助手以简短自然的普通话先确定日期和开始时间，再补齐时长（1–8小时，默认2小时）、姓名和联系方式，以日常说法播报日期和时间，不念标点、不逐字停顿或重复提示。电话预约不询问球场。核对包括已分配球场在内的完整复述，再在下一轮明确说“确认预约”或按1。姓名会在日程公开显示，测试时使用适合公开的姓名。
+- 查询：“Is there a court available tomorrow at 3 pm for two hours?”核对回复与网页空档。
+- 创建：“I’d like to book tomorrow at 3 pm.”。助手以简短自然的英语先确定日期和开始时间，再补齐时长（1–8小时，默认2小时）、姓名和联系方式，以日常说法播报日期和时间，不念标点、不逐字停顿或重复提示。电话预约不询问球场。核对包括已分配球场在内的完整复述，再在下一轮明确说“confirm booking”或按1。姓名会在日程公开显示，测试时使用适合公开的姓名。
 - 验证未确认、否定、字段缺失、无关问题与已占用时段不会创建预约。不要在最初需求中夹带确认。
 - 成功后查看发到已确认联系电话的短信，核对日期、场地、时间、时长、姓名、预约编号和管理码；未配置或发送失败时，系统将编号和管理码各读一次供记录。刷新本机网页核对；测试查询、修改和取消，并确认取消后时段释放。修改与取消仍须凭据核验和单独确认。
 - 在系统提示输入数字时，可用电话键盘输入预约编号、管理码等内容。不要把密钥或无关个人信息说进电话。
@@ -93,9 +93,9 @@ Gather与Realtime电话预约均由程序分配球场，不采用客户或模型
 
 仓库自动化测试使用模拟OpenAI和Twilio事件，验证受控预约流程、签名与内部认证、音频转发和中断处理，不发送真实短信。本次没有用你的真实账号、号码或手机验证通话和短信送达，必须完成上述本机验收后再给客户使用。
 
-### 说“我要预定”却没有进入预约时
+### 说“I’d like to book”却没有进入预约时
 
-先更新代码并停止旧服务，再运行 `npm run sms:local -- --diagnose`（只需要电话时可用 `npm run phone:diagnose`）。新版兼容分开到达的Realtime函数事件；某轮没有有效函数结果时，将原始语音转写交给预约程序继续处理。“我要预定”应进入日期追问，之后可以回答“明天”，逐项补齐信息。
+先更新代码并停止旧服务，再运行 `npm run sms:local -- --diagnose`（只需要电话时可用 `npm run phone:diagnose`）。新版兼容分开到达的Realtime函数事件；某轮没有有效函数结果时，将原始语音转写交给预约程序继续处理。“I’d like to book”应进入日期追问，之后可以回答“tomorrow”，逐项补齐信息。
 
 终端会输出不含原话的状态，例如：
 
@@ -115,4 +115,4 @@ Realtime音频、输入转写会使用OpenAI API额度；Twilio号码、通话�
 
 ## 切回原来的电话模式
 
-将 `.env.local` 的 `VOICE_MODE=gather`，按 **Ctrl+C** 停止旧服务，再运行原来的 `phone:local` 或 `sms:local`。预检应显示 `Voice mode: Twilio Gather`。`BOOKING_AI_ENABLED=0` 可同时关闭Gather与短信的可选文本理解；仅关闭该开关不会关闭Realtime音频。数据库和已有预约保留，隧道域名变化时更新Twilio回调。
+将 `.env.local` 的 `VOICE_MODE=gather`，按 **Ctrl+C** 停止旧服务，再运行原来的 `phone:local` 或 `sms:local`。预检应显示 `Voice mode: Twilio Gather (English ASR en-AU; Polly.Olivia-Neural)`。`BOOKING_AI_ENABLED=0` 可同时关闭Gather与短信的可选文本理解；仅关闭该开关不会关闭Realtime音频。数据库和已有预约保留，隧道域名变化时更新Twilio回调。

@@ -79,7 +79,7 @@ function pendingBooking() {
       name: "张三",
     }),
   );
-  assert.match(contact, /联系电话/);
+  assert.match(contact, /contact number/i);
   assert.equal(call.state().step, "contact");
   assert.equal(
     call.state().court,
@@ -87,9 +87,9 @@ function pendingBooking() {
     "server assignment ignores the requested court when both are free",
   );
   const summary = call.send("使用来电号码");
-  assert.match(summary, /预约人张三/);
-  assert.match(summary, /三小时/);
-  assert.match(summary, /姓名会公开显示/);
+  assert.match(summary, /Booking name: 张三/i);
+  assert.match(summary, /3 hours/);
+  assert.match(summary, /name will appear publicly on the website schedule/i);
   assert.equal(call.state().step, "confirm");
   assert.equal(listBookings().length, 0);
   return call;
@@ -99,7 +99,7 @@ test("voice understanding fills several fields while a later raw confirmation ow
   const call = pendingBooking();
   const summaryTurn = call.state().turn;
   const committed = call.send("确认预约");
-  assert.match(committed, /预约成功/);
+  assert.match(committed, /Booking confirmed/i);
   assert.equal(listBookings().length, 1);
   const booking = listBookings()[0];
   assert.equal(booking.courtId, 1);
@@ -142,8 +142,8 @@ test("a model court preference cannot narrow a phone availability query", () => 
       duration: 3,
     }),
   );
-  assert.match(availability, /1号场/);
-  assert.match(availability, /2号场/);
+  assert.match(availability, /Court 1/);
+  assert.match(availability, /Court 2/);
   assert.equal(call.state().step, "menu");
   assert.equal(listBookings().length, 0);
 });
@@ -154,8 +154,8 @@ test("a model schedule correction is reviewed and needs a new explicit confirmat
     "换成晚上六点只打一小时",
     understanding({ hour: "18", duration: 1, correction: "hour" }),
   );
-  assert.match(revised, /晚上六点/);
-  assert.match(revised, /一小时/);
+  assert.match(revised, /6(?: to 7)? pm/);
+  assert.match(revised, /1 hour/);
   assert.equal(call.state().step, "confirm");
   assert.equal(listBookings().length, 0);
   call.send("确认预约");
@@ -188,7 +188,10 @@ test("model off-topic understanding keeps the caller within tennis booking", () 
     "推荐一部电影",
     understanding({ scope: "off_topic", action: "book", name: "张三" }),
   );
-  assert.match(response, /只能|只处理/);
+  assert.match(
+    response,
+    /only help check, create, change or cancel tennis court bookings/i,
+  );
   assert.equal(call.state().step, "menu");
   assert.equal(listBookings().length, 0);
 });
@@ -262,7 +265,7 @@ test("a late interpretation for an earlier turn cannot replace the current quest
       name: "李四",
     }),
   );
-  assert.match(recovery, /再次回答当前问题/);
+  assert.match(recovery, /answer the current question again/i);
   assert.equal(getChannelState(`voice:${call.sid}`), before);
   assert.equal(listBookings().length, 0);
 });
@@ -281,7 +284,7 @@ test("invalid model schedule fields cannot bypass the store's booking rules", ()
     }),
   );
   assert.equal(listBookings().length, 0);
-  assert.doesNotMatch(response, /确认无误/);
+  assert.doesNotMatch(response, /confirm booking/i);
 });
 
 test("server assignment uses court two when court one cannot fit the full modeled interval", () => {
@@ -308,9 +311,9 @@ test("server assignment uses court two when court one cannot fit the full modele
   assert.equal(listBookings().length, 1);
   assert.equal(call.state().court, 2);
   assert.equal(call.state().step, "contact");
-  assert.match(contact, /联系电话/);
+  assert.match(contact, /contact number/i);
   const review = call.send("使用来电号码");
-  assert.match(review, /2号场/);
+  assert.match(review, /Court 2/);
   assert.equal(call.state().step, "confirm");
   assert.equal(listBookings().length, 1);
   call.send("确认预约");
@@ -344,7 +347,7 @@ test("when neither court fits the modeled interval the caller must choose a new 
   );
   assert.equal(call.state().step, "hour");
   assert.equal(call.state().hour, undefined);
-  assert.match(unavailable, /暂无空档|没有.*空档|无法完整预订|不可预订/);
+  assert.match(unavailable, /Neither court is available for the full booking/i);
   assert.equal(listBookings().length, 2);
 });
 
@@ -522,7 +525,7 @@ test("the route discards a late interpretation after another callback advances t
     mock.release();
     const response = await pending;
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /再次回答当前问题/);
+    assert.match(await response.text(), /answer the current question again/i);
     assert.equal(getChannelState(`voice:${call.sid}`), advanced);
     assert.equal(listBookings().length, 0);
   } finally {
@@ -560,7 +563,7 @@ test("an interpretation timeout falls back to the existing deterministic voice f
       signedRequest(call.sid, call.state().turn, "我要预约"),
     );
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /哪一天/);
+    assert.match(await response.text(), /which date/i);
     assert.equal(call.state().step, "date");
     assert.equal(listBookings().length, 0);
     assert.ok(Date.now() - started < 6500);

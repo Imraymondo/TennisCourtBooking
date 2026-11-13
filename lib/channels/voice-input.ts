@@ -46,6 +46,60 @@ const DIGITS: Record<string, number> = {
 const NUMBER =
   "[0-9零〇○一壹幺二贰貳两兩三叁參四肆五伍六陆陸七柒八捌九玖十拾百佰千仟]+";
 
+const ENGLISH_NUMBERS: Record<string, number> = {
+  zero: 0,
+  oh: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+};
+const ENGLISH_NUMBER =
+  "(?:twenty(?:[ -](?:one|two|three|four|five|six|seven|eight|nine))?|thirty(?:[ -]one)?|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)";
+
+function englishNumber(raw: string): number | null {
+  if (/^\d+(?:st|nd|rd|th)?$/i.test(raw))
+    return Number(raw.replace(/(?:st|nd|rd|th)$/i, ""));
+  const parts = raw.toLowerCase().split(/[ -]+/);
+  return parts.every((part) => part in ENGLISH_NUMBERS)
+    ? parts.reduce((sum, part) => sum + ENGLISH_NUMBERS[part], 0)
+    : null;
+}
+
+/** Digit-by-digit values stay strings so a leading zero is never lost. */
+export function parseSpokenDigits(input: string): string | null {
+  const value = stripSpeech(input)
+    .toLowerCase()
+    .replace(
+      /\b(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b/g,
+      (word) => String(ENGLISH_NUMBERS[word]),
+    );
+  const digits = [...value]
+    .map((character) =>
+      character in DIGITS ? String(DIGITS[character]) : character,
+    )
+    .join("")
+    .replace(/[\s，,。.！!.-]/g, "");
+  return /^\d+$/.test(digits) ? digits : null;
+}
+
 function numberValue(raw: string): number | null {
   const value = raw.replace(/\s/g, "");
   if (/^\d+$/.test(value)) return Number(value);
@@ -98,10 +152,16 @@ function normalizeBookingTerms(input: string): string {
 }
 
 export function parseIntent(input: string): VoiceIntent | null {
+  if (
+    /\b(?:do not|don't|dont|not|never)\s+(?:(?:want|wish|need)\s+to\s+)?(?:book|reserve|cancel|change|reschedule|modify)\b/i.test(
+      input,
+    )
+  )
+    return null;
   const value = normalizeBookingTerms(stripSpeech(input))
     .toLowerCase()
     .replace(/\s+/g, "");
-  if (!value || isOffTopic(value)) return null;
+  if (!value || isOffTopic(input)) return null;
   if (
     /不(?:想|要|需要)?(?:取消|预订|预约|修改)|别(?:取消|预订|预约|修改)/.test(
       value,
@@ -113,7 +173,7 @@ export function parseIntent(input: string): VoiceIntent | null {
   if (/修改|改约|改約|改期|更改|调整|調整|change|reschedule|modify/.test(value))
     intents.add("change");
   if (
-    /查看(?:已有|我的|现有|現有)?(?:预约|預約|预订|預訂)|查询(?:我的|已有|现有)(?:预约|预订)|view(?:my)?booking|^(?:已有|我的|现有)(?:预约|預約|预订|預訂)$|^mybooking$/.test(
+    /查看(?:已有|我的|现有|現有)?(?:预约|預約|预订|預訂)|查询(?:我的|已有|现有)(?:预约|预订)|(?:view|lookup|find|check)(?:my|anexisting|existing)?(?:booking|reservation)|^(?:已有|我的|现有)(?:预约|預約|预订|預訂)$|^mybooking$/.test(
       value,
     )
   )
@@ -169,9 +229,9 @@ export function parseCalendarDate(
   nowDate?: string,
 ): string | null {
   const today = anchorDate(nowDate);
-  const value = stripSpeech(input).replace(/\s/g, "");
+  const value = stripSpeech(input).toLowerCase().replace(/\s+/g, " ");
   if (!today || !value || isOffTopic(value)) return null;
-  if (/或|还是|還是|要不|、/.test(value)) return null;
+  if (/或|还是|還是|要不|、|\b(?:or|either)\b/.test(value)) return null;
   const candidates: { start: number; end: number; date: string | null }[] = [];
   const collect = (
     pattern: RegExp,
@@ -223,15 +283,118 @@ export function parseCalendarDate(
     },
   );
   collect(
-    /大后天|大後天|后天|後天|今天|今日|明天|明日|today|tomorrow/gi,
+    /大后天|大後天|后天|後天|今天|今日|明天|明日|\b(?:the )?day after tomorrow\b|\btoday\b|\btomorrow\b/gi,
     (match) => {
       const offset = /大/.test(match[0])
         ? 3
-        : /后|後/.test(match[0])
+        : /后|後|day after tomorrow/i.test(match[0])
           ? 2
           : /明|tomorrow/i.test(match[0])
             ? 1
             : 0;
+      return today.add({ days: offset }).toString();
+    },
+  );
+  const months = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+  ];
+  const monthPattern =
+    "(?:january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)";
+  const ordinalNames: Record<string, number> = {
+    first: 1,
+    second: 2,
+    third: 3,
+    fourth: 4,
+    fifth: 5,
+    sixth: 6,
+    seventh: 7,
+    eighth: 8,
+    ninth: 9,
+    tenth: 10,
+    eleventh: 11,
+    twelfth: 12,
+    thirteenth: 13,
+    fourteenth: 14,
+    fifteenth: 15,
+    sixteenth: 16,
+    seventeenth: 17,
+    eighteenth: 18,
+    nineteenth: 19,
+    twentieth: 20,
+    "twenty first": 21,
+    "twenty second": 22,
+    "twenty third": 23,
+    "twenty fourth": 24,
+    "twenty fifth": 25,
+    "twenty sixth": 26,
+    "twenty seventh": 27,
+    "twenty eighth": 28,
+    "twenty ninth": 29,
+    thirtieth: 30,
+    "thirty first": 31,
+  };
+  const ordinalPattern = `(?:${Object.keys(ordinalNames)
+    .sort((a, b) => b.length - a.length)
+    .map((word) => word.replace(/ /g, "[ -]"))
+    .join("|")})`;
+  const dayPattern = `(?:\\d{1,2}(?:st|nd|rd|th)?|${ordinalPattern}|${ENGLISH_NUMBER})`;
+  const namedDate = (monthName: string, dayName: string, yearName?: string) => {
+    const month =
+      months.findIndex((name) =>
+        name.startsWith(monthName.replace(/\.$/, "")),
+      ) + 1;
+    const day =
+      ordinalNames[dayName.replace(/-/g, " ")] ?? englishNumber(dayName);
+    if (!month || day === null) return null;
+    if (yearName) return calendarDate(Number(yearName), month, day);
+    for (let year = today.year; year <= today.year + 8; year += 1) {
+      const date = calendarDate(year, month, day);
+      if (date && Temporal.PlainDate.compare(date, today) >= 0) return date;
+    }
+    return null;
+  };
+  collect(
+    new RegExp(
+      `\\b(${monthPattern})\\.?\\s+(?:the\\s+)?(${dayPattern})(?:,?\\s+(\\d{4}))?\\b`,
+      "g",
+    ),
+    (match) => namedDate(match[1], match[2], match[3]),
+  );
+  collect(
+    new RegExp(
+      `\\b(?:the\\s+)?(${dayPattern})(?:\\s+of)?\\s+(${monthPattern})\\.?(?:,?\\s+(\\d{4}))?\\b`,
+      "g",
+    ),
+    (match) => namedDate(match[2], match[1], match[3]),
+  );
+  const weekdays = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+  ];
+  collect(
+    /\b(?:(next|this)\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/g,
+    (match) => {
+      const day = weekdays.indexOf(match[2]) + 1;
+      const offset =
+        match[1] === "next"
+          ? 7 - today.dayOfWeek + day
+          : (day - today.dayOfWeek + 7) % 7;
       return today.add({ days: offset }).toString();
     },
   );
@@ -319,8 +482,93 @@ function qualifiedHour(hour: number, qualifier: string): number | null {
   return hour;
 }
 
+function englishHour(input: string): string | null {
+  const value = stripSpeech(input)
+    .toLowerCase()
+    .replace(/\b([ap])\.?\s*m\.?/g, "$1m");
+  if (
+    /\b(?:half|quarter|minutes?|hours?)\b|\d\.\d|\b(?:or|either)\b/.test(value)
+  )
+    return null;
+  const matches: number[] = [];
+  const occupied: { start: number; end: number }[] = [];
+  const collect = (
+    pattern: RegExp,
+    convert: (match: RegExpExecArray) => number | null,
+  ) => {
+    for (const match of value.matchAll(pattern)) {
+      if (
+        occupied.some(
+          (part) =>
+            match.index < part.end &&
+            match.index + match[0].length > part.start,
+        )
+      )
+        continue;
+      occupied.push({ start: match.index, end: match.index + match[0].length });
+      matches.push(convert(match) ?? -1);
+    }
+  };
+  const qualify = (hour: number | null, period = "") => {
+    if (hour === null || hour < 0 || hour > 23) return null;
+    if (/pm|afternoon|evening/.test(period))
+      return hour === 0 ? null : hour < 12 ? hour + 12 : hour;
+    if (/am|morning/.test(period))
+      return hour === 12 ? 0 : hour < 12 ? hour : null;
+    if (/night/.test(period))
+      return hour === 12
+        ? 0
+        : hour >= 6 && hour < 12
+          ? hour + 12
+          : hour < 6 || hour >= 18
+            ? hour
+            : null;
+    return hour;
+  };
+  const number = `(?:\\d{1,2}|${ENGLISH_NUMBER})`;
+  collect(/\b(?:(?:12|twelve)\s+)?(noon|midnight)\b/g, (match) =>
+    match[1] === "noon" ? 12 : 0,
+  );
+  collect(
+    new RegExp(
+      `\\b(${number})(?::(\\d{2}))?\\s*(?:o['’]?clock\\s*)?(am|pm|in\\s+the\\s+(?:morning|afternoon|evening)|at\\s+night)\\b`,
+      "g",
+    ),
+    (match) =>
+      // In "three fifteen pm", the qualified match starts at "fifteen".
+      // Keep the preceding clock number from becoming an ignored minute.
+      new RegExp(`\\b${number}\\s+$`).test(value.slice(0, match.index)) ||
+      (match[2] && match[2] !== "00")
+        ? null
+        : qualify(englishNumber(match[1]), match[3]),
+  );
+  collect(/\b(\d{1,2}):(\d{2})\b/g, (match) =>
+    match[2] === "00" ? qualify(Number(match[1])) : null,
+  );
+  collect(
+    new RegExp(
+      `\\b(?:at|from|start(?:ing)?(?:\\s+at)?)\\s+(${number})(?:\\s+o['’]?clock)?\\b|\\b(${number})\\s+o['’]?clock\\b`,
+      "g",
+    ),
+    (match) => qualify(englishNumber(match[1] || match[2])),
+  );
+  if (!matches.length && new RegExp(`^${number}$`).test(value))
+    matches.push(englishNumber(value) ?? -1);
+  return matches.length === 1 && matches[0] >= 0
+    ? String(matches[0]).padStart(2, "0")
+    : null;
+}
+
 /** Returns a 24-hour HH string. Non-zero minutes are rejected, never rounded. */
 export function parseHourSpeech(input: string): string | null {
+  // An English name in a booking sentence does not change the clock language.
+  if (
+    /[a-z]/i.test(input) &&
+    !/点|點|时|時|凌晨|午夜|清晨|早晨|早上|上午|中午|下午|傍晚|晚上|晚间|晚間/.test(
+      input,
+    )
+  )
+    return isOffTopic(input) ? null : englishHour(input);
   const value = stripSpeech(input).toLowerCase().replace(/\s/g, "");
   if (
     !value ||
@@ -369,6 +617,31 @@ export function parseHourSpeech(input: string): string | null {
 }
 
 export function parseDurationSpeech(input: string): number | null {
+  if (
+    /[a-z]/i.test(input) &&
+    !/小时|小時|钟头|鐘頭|分钟|分鐘|默认|默認/.test(input)
+  ) {
+    const value = stripSpeech(input).toLowerCase();
+    if (
+      isOffTopic(value) ||
+      /\b(?:half|quarter|minutes?|or|either)\b|\d\.\d/.test(value)
+    )
+      return null;
+    const matches = [
+      ...value.matchAll(
+        new RegExp(`\\b(\\d+|${ENGLISH_NUMBER})\\s*(?:hours?|h)\\b`, "g"),
+      ),
+    ];
+    if (matches.length > 1) return null;
+    const explicit = matches.length
+      ? englishNumber(matches[0][1])
+      : englishNumber(value);
+    if (/\bdefault\b/.test(value))
+      return explicit === null || explicit === 2 ? 2 : null;
+    return explicit !== null && explicit >= 1 && explicit <= 8
+      ? explicit
+      : null;
+  }
   const value = stripSpeech(input).toLowerCase().replace(/\s/g, "");
   if (!value || isOffTopic(value) || /半|刻|分钟|分鐘|\d\.\d/.test(value))
     return null;
@@ -393,6 +666,14 @@ export function parseDurationSpeech(input: string): number | null {
 }
 
 export function usesCallerNumber(input: string): boolean {
+  const english = stripSpeech(input).toLowerCase();
+  if (/\b(?:not|don't|dont|never|cancel|no)\b/.test(english)) return false;
+  if (
+    /^(?:please\s+)?(?:just\s+)?(?:use|keep)(?:\s+my)?\s+(?:calling (?:phone )?number|caller (?:id|number)|current (?:phone )?number|this (?:phone )?number|same (?:phone )?number)(?:\s+please)?$/.test(
+      english,
+    )
+  )
+    return true;
   const value = stripSpeech(input).replace(/\s/g, "");
   if (/不|别|別|不要|不用|取消/.test(value)) return false;
   return /^(?:(?:请|請)?(?:就)?(?:使用|用|采用|採用))?(?:我的)?(?:来电(?:显示)?号码|來電(?:顯示)?號碼|来电号码|来电显示|本机号码|本機號碼|当前号码|當前號碼|这个(?:电话)?号码|這個(?:電話)?號碼|该号码|同来电号码)(?:就好|即可)?$/.test(
@@ -408,8 +689,17 @@ export function parsePhoneSpeech(input: string): string | null {
       "",
     )
     .replace(/^my (?:phone )?number is\s*/i, "")
-    .replace(/^加(?:号|號)?/, "+")
-    .replace(/[\s()（）.，,、-]/g, "");
+    .replace(
+      /^(?:(?:my|the)\s+)?(?:(?:contact|mobile|telephone|phone)\s+)?number(?:\s+is)?\s*[:：]?\s*/i,
+      "",
+    )
+    .replace(/^plus\s+/i, "+")
+    .replace(/^加(?:号|號)?/, "+");
+  value = value.replace(
+    /\b(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b/gi,
+    (word) => String(ENGLISH_NUMBERS[word.toLowerCase()]),
+  );
+  value = value.replace(/[\s()（）.，,、-]/g, "");
   value = [...value]
     .map((character) =>
       character in DIGITS ? String(DIGITS[character]) : character,
@@ -434,6 +724,12 @@ export function parseNameSpeech(input: string): string | null {
     /^(?:我的(?:姓名|名字)(?:是|叫)|姓名(?:是|叫|为)|名字(?:是|叫)|我叫|叫我|我是|my name is\s+|i(?:'m| am)\s+)/i;
   const explicit = introduced.test(value);
   const name = value.replace(introduced, "").trim();
+  if (
+    /\b(?:want to|like to|need to|book a|book the|change my|cancel my|phone number|contact number|don't know|do not know)\b/i.test(
+      name,
+    )
+  )
+    return null;
   if (
     /吗|嗎|么|麼|呢|什么|什麼|怎么|怎麼|怎么样|怎麼樣|谢谢|謝謝|你好|再见|再見|帮我|幫我|预约|預約|预订|預訂|球场|球場|查询|查詢|修改|取消|今天|明天|后天|後天|下午|上午|中午|晚上|凌晨|小时|小時|电话|電話|号码|號碼|邮箱|郵箱|工作人员|工作人員|不告诉|不知道/.test(
       name,
@@ -471,6 +767,22 @@ export function parseNameSpeech(input: string): string | null {
 /** Final mutations require an explicit confirmation phrase, not casual assent. */
 export function explicitConfirmation(input: string): VoiceConfirmation {
   if (/[?？]|吗|嗎|么|麼|是否/.test(input) || isOffTopic(input)) return null;
+  const english = stripSpeech(input).toLowerCase();
+  if (
+    /\b(?:do not|don't|dont|not|never)\s+(?:confirm|cancel|book|proceed)\b/.test(
+      english,
+    ) ||
+    /^(?:no(?: thank you)?|reject|stop|cancel|go back|start again)$/.test(
+      english,
+    )
+  )
+    return "reject";
+  if (
+    /^(?:(?:yes[, ]+)?(?:i\s+)?confirm)(?:\s+(?:the\s+)?(?:booking|reservation|cancellation|cancel|change|changes|details))?$/.test(
+      english,
+    )
+  )
+    return "confirm";
   const value = normalizeBookingTerms(stripSpeech(input))
     .toLowerCase()
     .replace(/[\s，,]/g, "");

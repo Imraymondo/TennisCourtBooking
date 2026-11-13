@@ -11,7 +11,7 @@ export function timingSafeText(actual: string, expected: string): boolean {
 export async function limitedBody(request: Request, maximum = 32_768) {
   const length = Number(request.headers.get("content-length") || 0);
   if (!Number.isFinite(length) || length > maximum)
-    throw new AppError("请求内容过大", 413);
+    throw new AppError("The request body is too large.", 413);
   if (!request.body) return "";
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -22,7 +22,7 @@ export async function limitedBody(request: Request, maximum = 32_768) {
     size += value.byteLength;
     if (size > maximum) {
       await reader.cancel();
-      throw new AppError("请求内容过大", 413);
+      throw new AppError("The request body is too large.", 413);
     }
     chunks.push(value);
   }
@@ -32,7 +32,7 @@ export async function limitedBody(request: Request, maximum = 32_768) {
 export function channelError(error: unknown): string {
   return error instanceof AppError
     ? error.message
-    : "暂时无法处理，请稍后重试或联系工作人员。";
+    : "We are unable to process this right now. Please try again later or contact staff.";
 }
 
 export function escapeXml(value: string) {
@@ -51,7 +51,8 @@ export function escapeXml(value: string) {
 
 export function baseUrl(): string {
   const raw = process.env.APP_BASE_URL;
-  if (!raw) throw new AppError("电话和短信渠道尚未配置", 503);
+  if (!raw)
+    throw new AppError("Phone and SMS channels are not configured.", 503);
   const url = new URL(raw);
   if (
     url.username ||
@@ -60,7 +61,10 @@ export function baseUrl(): string {
     url.hash ||
     !["", "/"].includes(url.pathname)
   ) {
-    throw new AppError("APP_BASE_URL 必须是公开服务的 HTTPS origin", 503);
+    throw new AppError(
+      "APP_BASE_URL must be the public service's HTTPS origin.",
+      503,
+    );
   }
   if (
     url.protocol !== "https:" &&
@@ -70,7 +74,7 @@ export function baseUrl(): string {
       ["localhost", "127.0.0.1"].includes(url.hostname)
     )
   ) {
-    throw new AppError("电话和短信渠道需要 HTTPS 地址", 503);
+    throw new AppError("Phone and SMS channels require an HTTPS URL.", 503);
   }
   return url.origin;
 }
@@ -95,18 +99,19 @@ export function twilioConfigured(): boolean {
 export async function verifiedTwilioCallbackForm(
   request: Request,
 ): Promise<URLSearchParams> {
-  if (!twilioConfigured()) throw new AppError("电话和短信渠道尚未配置", 503);
+  if (!twilioConfigured())
+    throw new AppError("Phone and SMS channels are not configured.", 503);
   if (
     !request.headers
       .get("content-type")
       ?.includes("application/x-www-form-urlencoded")
   ) {
-    throw new AppError("不支持的请求格式", 415);
+    throw new AppError("Unsupported request format.", 415);
   }
   const form = new URLSearchParams(await limitedBody(request));
   const keys = [...new Set(form.keys())].sort();
   if (keys.some((key) => form.getAll(key).length !== 1))
-    throw new AppError("重复的请求字段", 400);
+    throw new AppError("Duplicate request fields.", 400);
   const path = new URL(request.url);
   const originalUrl = `${baseUrl()}${path.pathname}${path.search}`;
   const material =
@@ -117,7 +122,7 @@ export async function verifiedTwilioCallbackForm(
   if (
     !timingSafeText(request.headers.get("x-twilio-signature") || "", signature)
   ) {
-    throw new AppError("无效的 Twilio 签名", 403);
+    throw new AppError("Invalid Twilio signature.", 403);
   }
   return form;
 }
@@ -130,7 +135,7 @@ export async function verifiedTwilioForm(
     form.get("To") !== process.env.TWILIO_PHONE_NUMBER ||
     !/^\+\d{7,15}$/.test(form.get("From") || "")
   ) {
-    throw new AppError("无效的收发号码", 400);
+    throw new AppError("Invalid sender or recipient number.", 400);
   }
   return form;
 }

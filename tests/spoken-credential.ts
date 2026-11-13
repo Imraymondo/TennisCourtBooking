@@ -1,10 +1,13 @@
+import { parseSpokenDigits } from "../lib/channels/voice-input";
+
 /** Decode the once-spoken, grouped reference a caller would enter on the keypad. */
-export function spokenCredential(text: string, label = "管理码"): string {
-  const raw = text.match(new RegExp(`${label}：([^。]+)`))?.[1] || "";
-  return raw
-    .replace(/[零〇一二三四五六七八九]/g, (value) => {
-      if (value === "〇") return "0";
-      return String("零一二三四五六七八九".indexOf(value));
-    })
-    .replace(/[，,\s]/g, "");
+export function spokenCredential(text: string, label = "Access code"): string {
+  const labels = /管理码|management code|access code/i.test(label)
+    ? "Access code|Management code|管理码"
+    : /预约编号|booking reference|booking id/i.test(label)
+      ? "Booking reference|Booking ID|预约编号"
+      : label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const raw =
+    text.match(new RegExp(`(?:${labels})[:：]\\s*([^。.<]+)`, "i"))?.[1] || "";
+  return parseSpokenDigits(raw) || "";
 }

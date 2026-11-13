@@ -89,9 +89,10 @@ const sessionKey = (streamSid: string) => `realtime:session:${streamSid}`;
 
 /** Called only inside the signed Twilio webhook's idempotent initial event. */
 export function createRealtimeVoice(callSid: string, phone: string): string {
-  if (!realtimeVoiceEnabled()) throw new AppError("实时电话渠道尚未配置", 503);
+  if (!realtimeVoiceEnabled())
+    throw new AppError("Realtime phone service is not configured", 503);
   if (!SID.test(callSid) || !/^\+\d{7,15}$/.test(phone))
-    throw new AppError("无效的通话信息", 400);
+    throw new AppError("Invalid call information", 400);
   const origin = new URL(baseUrl());
   origin.protocol = "wss:";
   origin.pathname = "/api/realtime/voice";
@@ -105,12 +106,12 @@ export function createRealtimeVoice(callSid: string, phone: string): string {
     } satisfies Ticket),
     TICKET_TTL,
   );
-  return `<Connect><Stream url="${escapeXml(origin.toString())}"><Parameter name="ticket" value="${ticket}"/></Stream></Connect><Say language="cmn-CN" voice="Polly.Zhiyu">实时通话已结束。如果未能听清处理结果，请先到网站核对预约，避免重复提交。您也可以重新来电查询。</Say><Hangup/>`;
+  return `<Connect><Stream url="${escapeXml(origin.toString())}"><Parameter name="ticket" value="${ticket}"/></Stream></Connect><Say language="en-AU" voice="Polly.Olivia-Neural">This call has ended. If you missed the result, please check your booking on the website before submitting again. You can also call back to check.</Say><Hangup/>`;
 }
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new AppError("请求内容必须为对象", 400);
+    throw new AppError("Request body must be an object", 400);
   return value as Record<string, unknown>;
 }
 
@@ -121,7 +122,7 @@ function interpretation(
   if (value === null || value === undefined) return null;
   const item = object(value);
   const invalid = () => {
-    throw new AppError("无效的预约字段", 400);
+    throw new AppError("Invalid booking fields", 400);
   };
   if (
     Object.keys(item).length !== INTERPRETATION_KEYS.length ||
@@ -178,14 +179,14 @@ export function parseRealtimeRequest(value: unknown): RealtimeRequest {
     typeof item.streamSid !== "string" ||
     !SID.test(item.streamSid)
   )
-    throw new AppError("无效的通话或音频流编号", 400);
+    throw new AppError("Invalid call or audio stream ID", 400);
   const common = { callSid: item.callSid, streamSid: item.streamSid };
   let keys: string[];
   let parsed: RealtimeRequest;
   if (item.op === "start") {
     keys = ["op", "callSid", "streamSid", "ticket"];
     if (typeof item.ticket !== "string" || !/^[a-f0-9]{64}$/.test(item.ticket))
-      throw new AppError("无效的通话凭据", 400);
+      throw new AppError("Invalid call credentials", 400);
     parsed = { op: "start", ...common, ticket: item.ticket };
   } else if (item.op === "turn") {
     keys = [
@@ -207,7 +208,7 @@ export function parseRealtimeRequest(value: unknown): RealtimeRequest {
         (typeof item.digits !== "string" ||
           !/^[0-9*#]{0,32}$/.test(item.digits)))
     )
-      throw new AppError("无效的通话输入", 400);
+      throw new AppError("Invalid call input", 400);
     parsed = {
       op: "turn",
       ...common,
@@ -219,9 +220,9 @@ export function parseRealtimeRequest(value: unknown): RealtimeRequest {
   } else if (item.op === "stop") {
     keys = ["op", "callSid", "streamSid"];
     parsed = { op: "stop", ...common };
-  } else throw new AppError("无效的通话操作", 400);
+  } else throw new AppError("Invalid call operation", 400);
   if (Object.keys(item).some((key) => !keys.includes(key)))
-    throw new AppError("未知的通话字段", 400);
+    throw new AppError("Unknown call field", 400);
   return parsed;
 }
 
@@ -238,13 +239,13 @@ function readState<T>(key: string): T | null {
 function session(request: RealtimeRequest, allowStopped = false): Session {
   const saved = readState<Session>(sessionKey(request.streamSid));
   if (saved && saved.callSid !== request.callSid)
-    throw new AppError("通话与音频流不匹配", 403);
+    throw new AppError("Call does not match the audio stream", 403);
   if (
     !saved ||
     saved.expiresAt <= Date.now() ||
     (!allowStopped && !saved.active)
   )
-    throw new AppError("实时通话已结束或过期", 409);
+    throw new AppError("Realtime call has ended or expired", 409);
   return saved;
 }
 
@@ -320,7 +321,8 @@ function reply(callSid: string, xml: string): RealtimeReply {
       context.duration = state.duration;
   }
   const prompt = xmlToRealtimePrompt(xml);
-  if (!prompt) throw new AppError("实时通话提示暂时不可用", 503);
+  if (!prompt)
+    throw new AppError("Realtime call prompt is temporarily unavailable", 503);
   return { prompt, context, ...(!progress ? { closed: true } : {}) };
 }
 
@@ -334,23 +336,28 @@ function validateTicket(request: Start): Ticket {
       ? saved.streamSid !== request.streamSid
       : saved.expiresAt <= Date.now())
   )
-    throw new AppError("通话凭据无效或已过期", 403);
+    throw new AppError("Call credentials are invalid or expired", 403);
   if (saved.streamSid) {
     const active = session(request);
-    if (active.ticketHash !== hash) throw new AppError("通话凭据不匹配", 403);
+    if (active.ticketHash !== hash)
+      throw new AppError("Call credentials do not match", 403);
   } else if (
     getChannelState(sessionKey(request.streamSid)) ||
     getChannelEvent(`realtime:start:${request.streamSid}`) !== null
   ) {
     // A different ticket cannot replay an already connected stream's greeting.
-    throw new AppError("音频流已使用其他通话凭据", 403);
+    throw new AppError(
+      "Audio stream is already using different call credentials",
+      403,
+    );
   }
   return saved;
 }
 
 /** All work here is synchronous, including the existing booking transactions. */
 export function handleRealtimeRequest(request: RealtimeRequest): RealtimeReply {
-  if (!realtimeVoiceEnabled()) throw new AppError("实时电话渠道尚未配置", 503);
+  if (!realtimeVoiceEnabled())
+    throw new AppError("Realtime phone service is not configured", 503);
   if (request.op === "start") {
     validateTicket(request);
     return runChannelEvent(`realtime:start:${request.streamSid}`, () => {
@@ -359,7 +366,7 @@ export function handleRealtimeRequest(request: RealtimeRequest): RealtimeReply {
         readState(sessionKey(request.streamSid)) ||
         getChannelState(`realtime:call:${request.callSid}`)
       )
-        throw new AppError("该通话已连接音频流", 409);
+        throw new AppError("This call already has an audio stream", 409);
       rateLimit(`realtime:${request.callSid}`, 200, SESSION_TTL);
       const response = reply(
         request.callSid,
@@ -394,7 +401,7 @@ export function handleRealtimeRequest(request: RealtimeRequest): RealtimeReply {
       saveSession(request.streamSid, { ...saved, active: false });
       if (voiceProgress(request.callSid)?.turn === saved.turn)
         setChannelState(`voice:${request.callSid}`, null);
-      return { prompt: "本次通话已结束。", context: {}, closed: true };
+      return { prompt: "This call has ended.", context: {}, closed: true };
     });
   }
   return runChannelEvent(
@@ -403,7 +410,7 @@ export function handleRealtimeRequest(request: RealtimeRequest): RealtimeReply {
       const saved = session(request);
       const current = voiceProgress(request.callSid);
       if (!current || current.turn !== saved.turn)
-        throw new AppError("通话状态已更新，请重新来电", 409);
+        throw new AppError("Call state has changed. Please call again", 409);
       rateLimit(`realtime:${request.callSid}`, 200, SESSION_TTL);
       const response = reply(
         request.callSid,
