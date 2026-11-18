@@ -17,7 +17,9 @@ const publicOrigin = "https://local-phone.example";
 const signingToken = "local-phone-test-key-not-a-real-credential";
 const receivingNumber = "+61255550100";
 const callingNumber = "+61400123456";
+const attendanceAccountSid = `AC${"a".repeat(32)}`;
 const date = "2099-12-01";
+const attendanceDate = "2099-12-06";
 let directory: string | undefined;
 let app: ChildProcess | undefined;
 let appStopped: Promise<void> | undefined;
@@ -76,6 +78,7 @@ before(
       ADMIN_PASSWORD: randomBytes(24).toString("base64url"),
       APP_BASE_URL: publicOrigin,
       RENDER_EXTERNAL_URL: "",
+      // Keep automatic phone-booking SMS disabled, even for the fake account.
       TWILIO_ACCOUNT_SID: "",
       TWILIO_AUTH_TOKEN: signingToken,
       TWILIO_PHONE_NUMBER: receivingNumber,
@@ -220,6 +223,42 @@ async function publicSchedule(dateValue = date): Promise<Availability> {
   return response.json() as Promise<Availability>;
 }
 
+async function seedAttendanceCall(startLocal: string) {
+  assert.ok(directory);
+  const store = await import("../lib/store");
+  const previousDatabasePath = process.env.BOOKING_DB_PATH;
+  store.closeDatabase();
+  process.env.BOOKING_DB_PATH = join(directory, "bookings.sqlite");
+  try {
+    const created = store.createBooking({
+      courtId: 1,
+      startLocal,
+      customerName: "Local attendance fixture",
+      email: "",
+      phone: callingNumber,
+      source: "web",
+    });
+    const attempt = store.reserveAttendanceCall({
+      id: randomUUID(),
+      requestId: randomUUID(),
+      bookingId: created.booking.id,
+      bookingVersion: created.booking.version,
+      accountSid: attendanceAccountSid,
+      sender: receivingNumber,
+      callbackOrigin: publicOrigin,
+    });
+    assert.equal(store.claimAttendanceCall(attempt.id), true);
+    const callSid = `CA${randomUUID().replaceAll("-", "")}`;
+    // Seed the durable acknowledgement without invoking the outbound provider.
+    store.finishAttendanceCallSubmission(attempt.id, "submitted", callSid);
+    return { ...created, attemptId: attempt.id, callSid };
+  } finally {
+    store.closeDatabase();
+    if (previousDatabasePath === undefined) delete process.env.BOOKING_DB_PATH;
+    else process.env.BOOKING_DB_PATH = previousDatabasePath;
+  }
+}
+
 test("the opt-in SMS relay hides website, staff and email routes and all real handlers reject forged signatures", async () => {
   for (const path of [
     "/",
@@ -294,6 +333,127 @@ test("the opt-in SMS relay hides website, staff and email routes and all real ha
   );
   const schedule = await publicSchedule();
   assert.equal(schedule.courts.flatMap((court) => court.bookings).length, 0);
+});
+
+test("signed attendance key 2 crosses the real relay after an empty Gather and requires separate cancellation confirmation", async (t) => {
+  const cases = [
+    { speech: "I cannot", confidence: "0.23", hour: "10" },
+    { speech: "I cannot attend", confidence: "0.23", hour: "14" },
+  ];
+  for (const { speech, confidence, hour } of cases) {
+    await t.test(`key 2 with ASR ${JSON.stringify(speech)}`, async () => {
+      const startLocal = `${attendanceDate}T${hour}:00`;
+      const fixture = await seedAttendanceCall(startLocal);
+      const send = async (path: string, input: Record<string, string> = {}) => {
+        const turn: Turn = {
+          path,
+          fields: {
+            CallSid: fixture.callSid,
+            AccountSid: attendanceAccountSid,
+            From: receivingNumber,
+            To: callingNumber,
+            Direction: "outbound-api",
+            CallStatus: "in-progress",
+            ...input,
+          },
+        };
+        const result = await signedTurn(turn);
+        assert.equal(result.response.status, 200);
+        assert.match(
+          result.response.headers.get("content-type") || "",
+          /text\/xml/,
+        );
+        assert.equal(result.response.headers.get("cache-control"), "no-store");
+        assert.equal(result.response.headers.get("set-cookie"), null);
+        return { ...result, turn };
+      };
+      const nextPath = (xml: string) => {
+        assert.match(xml, /<Gather\b[^>]*input="dtmf speech"/);
+        assert.match(xml, /<Gather\b[^>]*actionOnEmptyResult="true"/);
+        const action = xml.match(/<Gather\b[^>]*action="([^"]+)"/)?.[1];
+        assert.ok(action, "attendance prompts include a next-step Gather");
+        const callback = new URL(action.replaceAll("&amp;", "&"));
+        assert.equal(callback.origin, publicOrigin);
+        assert.equal(callback.pathname, "/api/webhooks/attendance");
+        assert.equal(callback.searchParams.get("attempt"), fixture.attemptId);
+        assert.match(
+          callback.searchParams.get("turn") || "",
+          /^[a-f0-9-]{36}$/,
+        );
+        return callback.pathname + callback.search;
+      };
+      const checkBooking = async (
+        status: Booking["status"],
+        version: number,
+      ) => {
+        const response = await fetch(`${appUrl}/api/bookings/lookup`, {
+          method: "POST",
+          headers: { "content-type": "application/json", origin: appUrl },
+          body: JSON.stringify({
+            id: fixture.booking.id,
+            accessCode: fixture.accessCode,
+          }),
+          signal: AbortSignal.timeout(5_000),
+        });
+        assert.equal(response.status, 200);
+        const booking = ((await response.json()) as { booking: Booking })
+          .booking;
+        assert.equal(booking.status, status);
+        assert.equal(booking.version, version);
+        const schedule = await publicSchedule(attendanceDate);
+        assert.equal(
+          schedule.courts
+            .flatMap((court) => court.bookings)
+            .some((entry) => entry.id === fixture.booking.id),
+          status === "confirmed",
+        );
+        assert.equal(
+          schedule.slots.find(
+            (slot) => slot.courtId === 1 && slot.startLocal === startLocal,
+          )?.available,
+          status === "cancelled",
+        );
+      };
+
+      const initial = await send(
+        `/api/webhooks/attendance?attempt=${fixture.attemptId}`,
+      );
+      assert.match(initial.text, /Can you attend\?/);
+      const attendancePath = nextPath(initial.text);
+      await checkBooking("confirmed", 1);
+
+      const empty = await send(attendancePath);
+      assert.match(empty.text, /Your booking is still confirmed/);
+      const retryPath = nextPath(empty.text);
+      assert.notEqual(
+        retryPath,
+        attendancePath,
+        "empty Gather issues a fresh turn",
+      );
+      await checkBooking("confirmed", 1);
+
+      const review = await send(retryPath, {
+        Digits: "2",
+        SpeechResult: speech,
+        Confidence: confidence,
+      });
+      assert.match(review.text, /Would you like to cancel this booking\?/);
+      assert.match(review.text, /To confirm cancellation, press 1/);
+      const confirmationPath = nextPath(review.text);
+      assert.notEqual(confirmationPath, retryPath);
+      await checkBooking("confirmed", 1);
+
+      const cancelled = await send(confirmationPath, { Digits: "1" });
+      assert.match(cancelled.text, /booking has been cancelled/);
+      assert.doesNotMatch(cancelled.text, /<Gather\b/);
+      await checkBooking("cancelled", 2);
+
+      const replay = await signedTurn(cancelled.turn);
+      assert.equal(replay.response.status, 200);
+      assert.equal(replay.text, cancelled.text);
+      await checkBooking("cancelled", 2);
+    });
+  }
 });
 
 test("signed speech crosses the real relay and production app, requires confirmation and persists exactly one private-contact booking", async () => {

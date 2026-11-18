@@ -19,6 +19,7 @@ import {
   type AttendanceCall,
 } from "../store";
 import { escapeXml } from "./security";
+import { VOICE_CAPTURE } from "./voice-capture";
 import { spokenBookingSummary } from "./voice-speech";
 
 const UUID = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
@@ -310,10 +311,14 @@ function ask(
   });
   const prompt =
     phase === "attendance"
-      ? `${retry ? "I didn't catch that. " : `Hello, this is the tennis court. Your booking is ${spokenBookingSummary(value.booking)} `}Can you attend? Press 1 or say "I can attend". If you cannot attend, press 2 or say "I cannot attend".`
-      : `${retry ? "I didn't catch that. " : "You said you cannot attend. "}Would you like to cancel this booking? To confirm cancellation, press 1 or say "confirm cancellation". To keep your booking, press 2 or say "keep my booking".`;
+      ? `${retry ? "Your booking is still confirmed. " : `Hello, this is the tennis court. Your booking is ${spokenBookingSummary(value.booking)} `}Can you attend? Press 1 or say "I can attend". If you cannot attend, press 2 or say "I cannot attend".`
+      : `${retry ? "Your booking has not been cancelled. " : "You said you cannot attend. "}Would you like to cancel this booking? To confirm cancellation, press 1 or say "confirm cancellation". To keep your booking, press 2 or say "keep my booking".`;
+  const hints =
+    phase === "attendance"
+      ? "I can attend,I cannot attend,I can't attend,one,two,press one,press two"
+      : "confirm cancellation,cancel my booking,keep my booking,do not cancel";
   return response(
-    `<Gather input="dtmf speech" numDigits="1" language="en-AU" speechTimeout="auto" timeout="5" actionOnEmptyResult="true" method="POST" action="${escapeXml(callbackUrl(value, undefined, turn))}">${say(prompt)}</Gather>${say("No confirmation was received. Your booking has been kept. Goodbye.")}<Hangup/>`,
+    `<Gather input="dtmf speech" numDigits="1" language="${VOICE_CAPTURE.language}" speechTimeout="${VOICE_CAPTURE.speechPauseSeconds}" timeout="${VOICE_CAPTURE.startTimeoutSeconds}" hints="${escapeXml(hints)}" actionOnEmptyResult="true" method="POST" action="${escapeXml(callbackUrl(value, undefined, turn))}">${say(prompt)}</Gather>${say("No confirmation was received. Your booking has been kept. Goodbye.")}<Hangup/>`,
   );
 }
 
@@ -321,11 +326,14 @@ function speechChoice(
   value: string,
   phase: AttendanceCall["phase"],
 ): "yes" | "no" | null {
+  const normalized = value.normalize("NFKC");
   // A question is not consent, even when its words match a confirmation label.
-  if (/[?？]/.test(value)) return null;
-  const text = value
+  if (/[?？]/.test(normalized)) return null;
+  const text = normalized
     .toLowerCase()
-    .replace(/[\s，。！？,.!?;；:：“”"'’、]/g, "");
+    .replace(/[\s，。！？,.!?;；:：“”"'‘’、]/g, "")
+    .replace(/^(?:(?:imsorry|iamsorry|sorry|unfortunately)(?:but)?)+/, "")
+    .replace(/(?:(?:please|thankyou|thanks|sorry))+$/, "");
   if (phase === "confirm") {
     if (
       /^(确认取消|我确认取消|确认取消预约|我确认取消预约|确定取消|确定取消预约|取消预约|confirmcancel|confirmcancellation|iconfirmcancellation|iconfirmcancel|confirmthecancellation|cancelmybooking|cancelthebooking)$/.test(
@@ -334,21 +342,21 @@ function speechChoice(
     )
       return "yes";
     if (
-      /^(保留预约|不要取消|不取消|我会来|能来|能到场|我能到场|可以到场|我会到场|keepbooking|keepmybooking|keepthebooking|donotcancel|dontcancel|donotcancelmybooking|dontcancelmybooking|icanattend|iwillattend)$/.test(
+      /^(保留预约|不要取消|不取消|我会来|能来|能到场|我能到场|可以到场|我会到场|keepbooking|keepmybooking|keepthebooking|donotcancel|dontcancel|donotcancelmybooking|dontcancelmybooking|icanattend|iwillattend|2|two|press2|presstwo)$/.test(
         text,
       )
     )
       return "no";
   } else {
     if (
-      /^(能来|可以来|我能来|我会来|会来|能参加|可以参加|我能参加|会参加|能到场|我能到场|可以到场|我会到场|attend|attending|icanattend|iwillattend|illattend|icanmakeit|iwillbethere|illbethere|yes)$/.test(
+      /^(能来|可以来|我能来|我会来|会来|能参加|可以参加|我能参加|会参加|能到场|我能到场|可以到场|我会到场|attend|attending|icanattend|iwillattend|illattend|icanmakeit|iwillbethere|illbethere|yes|1|one|press1|pressone)$/.test(
         text,
       )
     )
       return "yes";
     if (
-      /^(不能来|我不能来|来不了|我来不了|不能参加|我不能参加|无法参加|不能到场|我不能到场|cannotattend|icannotattend|cantattend|icantattend|unabletoattend|imunabletoattend|icannotmakeit|icantmakeit|iwontbethere)$/.test(
-        text,
+      /^(不能来|我不能来|来不了|我来不了|不能参加|我不能参加|无法参加|不能到场|我不能到场|cannotattend|icannotattend|cantattend|icantattend|unabletoattend|imunabletoattend|icannotmakeit|icantmakeit|iwontbethere|2|two|press2|presstwo)$/.test(
+        text.replace(/^no/, ""),
       )
     )
       return "no";
@@ -362,18 +370,29 @@ function choice(
 ): "yes" | "no" | null {
   const digits = form.get("Digits")?.trim() || "";
   const speech = form.get("SpeechResult")?.trim() || "";
-  const confidence = form.get("Confidence");
-  const spoken =
-    speech &&
-    (confidence === null ||
-      (/^\d*(?:\.\d+)?$/.test(confidence) &&
-        Number(confidence) >= 0.8 &&
-        Number(confidence) <= 1))
-      ? speechChoice(speech, phase)
-      : null;
+  const confidence = form.get("Confidence")?.trim();
+  const validConfidence =
+    confidence === undefined ||
+    (/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(confidence) &&
+      Number(confidence) >= 0 &&
+      Number(confidence) <= 1);
+  const confident =
+    validConfidence && (confidence === undefined || Number(confidence) >= 0.8);
+  const spoken = speech && validConfidence ? speechChoice(speech, phase) : null;
   const pressed = digits === "1" ? "yes" : digits === "2" ? "no" : null;
-  if (digits && speech) return pressed && spoken === pressed ? pressed : null;
-  return digits ? pressed : spoken;
+  if (digits) {
+    if (!pressed) return null;
+    // First-stage key presses only preserve the booking or open a review, so
+    // explicit DTMF takes priority even if ASR mishears "can't" as "can".
+    if (phase === "attendance") return pressed;
+    if (pressed === "no") return spoken === "yes" ? null : "no";
+    // Final cancellation requires an unambiguous, separate confirmation.
+    return !speech || (confident && spoken === "yes") ? "yes" : null;
+  }
+  // A low-confidence negative can open the review, but cannot cancel a booking.
+  return spoken && (confident || (phase === "attendance" && spoken === "no"))
+    ? spoken
+    : null;
 }
 
 function statusCallback(value: AttendanceCall, form: URLSearchParams): string {
