@@ -666,10 +666,24 @@ export function parseDurationSpeech(input: string): number | null {
 }
 
 export function usesCallerNumber(input: string): boolean {
-  const english = stripSpeech(input).toLowerCase();
-  if (/\b(?:not|don't|dont|never|cancel|no)\b/.test(english)) return false;
+  // Match a complete instruction after normalizing ASR punctuation. A polite
+  // ending or inferred sentence punctuation must not hide an explicit choice.
+  const english = stripSpeech(input)
+    .toLowerCase()
+    .replace(/[’‘]/g, "'")
+    .replace(/\bcaller[\s-]+i\.?\s*d\.?/g, "caller id")
+    .replace(/[,，.;；:：!！。]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (
-    /^(?:please\s+)?(?:just\s+)?(?:use|keep)(?:\s+my)?\s+(?:calling (?:phone )?number|caller (?:id|number)|current (?:phone )?number|this (?:phone )?number|same (?:phone )?number)(?:\s+please)?$/.test(
+    /\b(?:not|don't|dont|never|cancel|no|maybe|perhaps|unsure)\b/.test(english)
+  )
+    return false;
+  if (
+    /^(?:yes\s+)?(?:(?:please|just)\s+){0,2}(?:use|keep)\s+(?:(?:my|the)\s+)?(?:calling (?:phone )?number|caller (?:id|number)|current (?:phone )?number|this (?:phone )?number|same (?:phone )?number)(?:\s+(?:please|thanks|thank you))?$/.test(
+      english,
+    ) ||
+    /^(?:yes\s+)?(?:(?:please|just)\s+){0,2}(?:use|keep)\s+(?:(?:my|the|this)\s+)?(?:phone\s+)?number\s+(?:that\s+)?i(?:'m| am)\s+(?:calling|ringing)(?:\s+you)?\s+(?:from|on)(?:\s+(?:please|thanks|thank you))?$/.test(
       english,
     )
   )

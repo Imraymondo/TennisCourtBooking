@@ -594,7 +594,10 @@ test(
       (await schedule()).courts.flatMap((court) => court.bookings).length,
       0,
     );
-    provider.transcript("item_contact", "use my calling number");
+    provider.transcript(
+      "item_contact",
+      "Please use the number I'm calling from.",
+    );
     const summary = await provider.prompts.wait(
       (prompt) => /say confirm booking/i.test(prompt),
       "uncommitted booking review",
@@ -828,7 +831,7 @@ test(
     assert.equal(provider.toolResponses, 5);
     const review = await answer(
       "raw_contact",
-      "use my calling number",
+      "Use my calling number, please.",
       /say confirm booking/i,
       "uncommitted raw-speech booking review",
     );

@@ -357,7 +357,7 @@ test("signed speech crosses the real relay and production app, requires confirma
   assert.match(nameQuestion.text, /booking name/i);
   assert.match(nameQuestion.text, /name will appear publicly/i);
   assert.match((await speak("My name is John Smith")).text, /contact number/i);
-  const confirm = await speak("use my calling number");
+  const confirm = await speak("Use my calling number, please.");
   assert.match(confirm.text, /say confirm booking/i);
   assert.match(confirm.text, /Court 1/);
   assert.doesNotMatch(confirm.text, /name will appear publicly/i);
