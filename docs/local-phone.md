@@ -104,7 +104,7 @@ Gather和Realtime电话预约都不再询问球场，也不采用客户或模型
 
 客户按1或说“I can attend”时保留预约；按2或说“I can’t attend”时进入取消复核，只有再按1或说“confirm cancellation”才会取消当前预约并释放时段。无人接听、挂断、没有听清或没有完成取消确认时，预约继续保留。后台以英语显示“No answer — booking kept”“Attendance confirmed”或取消结果，每30秒更新，也可以手动刷新。若预约在通话期间已被工作人员修改，旧回访不会更改新版本。
 
-回访也接受“Sorry, I can't attend”“press two”等明确回答。第一轮优先采用实体按键，不会被同时返回的语音识别结果拦住。较低置信度的“不能到场”只进入复核，不会取消预约；最终取消仍需单独确认，语音确认需足够置信度，按键与明确的语音取消意愿矛盾时会重问。
+回访也接受“Sorry, I can't attend”“press two”等明确回答。第一轮优先采用实体按键，不会被同时返回的语音识别结果拦住。“不能到场”只进入复核，不会取消预约；复核时明确说“confirm cancellation”“yes, confirm cancellation”或“I confirm the cancellation”才会取消。语音服务商的可选置信度只作诊断参考，不会单凭低分拒绝已完整识别的明确指令。疑问、否定、犹豫或按键与语音取消意愿矛盾时不会取消。
 
 客户电话请填写带国家代码的国际号码，澳洲手机也可使用04开头的本地格式。没有联系电话、已开始或已取消的预约不能发起回访。重复点击只提交一次拨号；结果待确认时不要反复拨打，应先核对Twilio通话记录。
 
@@ -118,7 +118,7 @@ Gather和Realtime电话预约都不再询问球场，也不采用客户或模型
 
 - **Missing变量**：把已有值保存在当前项目、本机的 `.env.local`，重新运行预检；不要将密钥发到聊天中。
 - **后台无法外呼到场确认**：按上节补齐SID并重启，确认ngrok仍运行、客户电话有效；试用账号检查目标号码验证和地区权限。
-- **回访按2仍重问**：更新代码、停止并重启原服务，再从后台发起新电话。用 `npm run phone:diagnose` 或 `VOICE_DEBUG=1` 检查 `Attendance callback:`：应显示 `version=attendance-input-2`、`input=digits` 或 `both`、`digits=2`、`turn=present`。日志只含输入状态和响应类型，不含语音原文或客户信息；若没有该日志，请检查 Twilio 通话记录中的回调是否为 `/api/webhooks/attendance`。新隧道的来电Voice地址仍需按脚本提示更新。
+- **回访按2或说“confirm cancellation”仍重问**：更新代码、停止并重启原服务，再从后台发起新电话。用 `npm run phone:diagnose` 或 `VOICE_DEBUG=1` 检查 `Attendance callback:`：应显示 `version=attendance-input-3`、`turn=present`，按2时 `input=digits` 或 `both`、`digits=2`；语音确认时应收到 `input=speech`，完成后 `outcome=end`。日志只含输入状态和响应类型，不含语音原文或客户信息；若没有该日志，请检查 Twilio 通话记录中的回调是否为 `/api/webhooks/attendance`。新隧道的来电Voice地址仍需按脚本提示更新。
 - **ngrok失败**：查看终端的 `ERR_NGROK_…` 错误码，检查Authtoken、账号开发域名与网络。可提供错误码，不需要提供密钥。
 - **Twilio11200或无法回调**：检查终端是否仍运行、号码VoiceWebhook是否为最新完整地址且为POST，以及ngrok连接状态。
 - **Twilio回调403**：检查该号码所属账号的Auth Token是否正确，号码和国家代码是否匹配。不要绕过签名校验；使用本脚本可避免旧APP_BASE_URL导致地址不一致。

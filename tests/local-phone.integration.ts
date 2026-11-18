@@ -223,13 +223,25 @@ async function publicSchedule(dateValue = date): Promise<Availability> {
   return response.json() as Promise<Availability>;
 }
 
-async function seedAttendanceCall(startLocal: string) {
+async function withFixtureDatabase<T>(
+  operation: (store: typeof import("../lib/store")) => T,
+): Promise<T> {
   assert.ok(directory);
   const store = await import("../lib/store");
   const previousDatabasePath = process.env.BOOKING_DB_PATH;
   store.closeDatabase();
   process.env.BOOKING_DB_PATH = join(directory, "bookings.sqlite");
   try {
+    return operation(store);
+  } finally {
+    store.closeDatabase();
+    if (previousDatabasePath === undefined) delete process.env.BOOKING_DB_PATH;
+    else process.env.BOOKING_DB_PATH = previousDatabasePath;
+  }
+}
+
+async function seedAttendanceCall(startLocal: string) {
+  return withFixtureDatabase((store) => {
     const created = store.createBooking({
       courtId: 1,
       startLocal,
@@ -252,11 +264,7 @@ async function seedAttendanceCall(startLocal: string) {
     // Seed the durable acknowledgement without invoking the outbound provider.
     store.finishAttendanceCallSubmission(attempt.id, "submitted", callSid);
     return { ...created, attemptId: attempt.id, callSid };
-  } finally {
-    store.closeDatabase();
-    if (previousDatabasePath === undefined) delete process.env.BOOKING_DB_PATH;
-    else process.env.BOOKING_DB_PATH = previousDatabasePath;
-  }
+  });
 }
 
 test("the opt-in SMS relay hides website, staff and email routes and all real handlers reject forged signatures", async () => {
@@ -336,12 +344,42 @@ test("the opt-in SMS relay hides website, staff and email routes and all real ha
 });
 
 test("signed attendance key 2 crosses the real relay after an empty Gather and requires separate cancellation confirmation", async (t) => {
-  const cases = [
-    { speech: "I cannot", confidence: "0.23", hour: "10" },
-    { speech: "I cannot attend", confidence: "0.23", hour: "14" },
+  const cases: {
+    speech: string;
+    confidence: string;
+    hour: string;
+    confirmation: Record<string, string>;
+  }[] = [
+    {
+      speech: "I cannot",
+      confidence: "0.23",
+      hour: "10",
+      confirmation: { Digits: "1" },
+    },
+    {
+      speech: "I cannot attend",
+      confidence: "0.23",
+      hour: "14",
+      confirmation: { Digits: "1" },
+    },
+    {
+      speech: "I cannot attend",
+      confidence: "0.23",
+      hour: "18",
+      confirmation: { SpeechResult: "confirm cancellation", Confidence: ".2" },
+    },
+    {
+      speech: "I cannot attend",
+      confidence: "0.23",
+      hour: "21",
+      confirmation: { SpeechResult: "confirm cancellation", Confidence: ".79" },
+    },
   ];
-  for (const { speech, confidence, hour } of cases) {
-    await t.test(`key 2 with ASR ${JSON.stringify(speech)}`, async () => {
+  for (const { speech, confidence, hour, confirmation } of cases) {
+    const finalAnswer = confirmation.SpeechResult
+      ? `spoken confirmation at confidence ${confirmation.Confidence}`
+      : "key 1 confirmation";
+    await t.test(`key 2 with ASR ${JSON.stringify(speech)}, then ${finalAnswer}`, async () => {
       const startLocal = `${attendanceDate}T${hour}:00`;
       const fixture = await seedAttendanceCall(startLocal);
       const send = async (path: string, input: Record<string, string> = {}) => {
@@ -386,18 +424,9 @@ test("signed attendance key 2 crosses the real relay after an empty Gather and r
         status: Booking["status"],
         version: number,
       ) => {
-        const response = await fetch(`${appUrl}/api/bookings/lookup`, {
-          method: "POST",
-          headers: { "content-type": "application/json", origin: appUrl },
-          body: JSON.stringify({
-            id: fixture.booking.id,
-            accessCode: fixture.accessCode,
-          }),
-          signal: AbortSignal.timeout(5_000),
-        });
-        assert.equal(response.status, 200);
-        const booking = ((await response.json()) as { booking: Booking })
-          .booking;
+        const booking = await withFixtureDatabase((store) =>
+          store.getBooking(fixture.booking.id, fixture.accessCode),
+        );
         assert.equal(booking.status, status);
         assert.equal(booking.version, version);
         const schedule = await publicSchedule(attendanceDate);
@@ -443,7 +472,7 @@ test("signed attendance key 2 crosses the real relay after an empty Gather and r
       assert.notEqual(confirmationPath, retryPath);
       await checkBooking("confirmed", 1);
 
-      const cancelled = await send(confirmationPath, { Digits: "1" });
+      const cancelled = await send(confirmationPath, confirmation);
       assert.match(cancelled.text, /booking has been cancelled/);
       assert.doesNotMatch(cancelled.text, /<Gather\b/);
       await checkBooking("cancelled", 2);

@@ -336,7 +336,7 @@ function speechChoice(
     .replace(/(?:(?:please|thankyou|thanks|sorry))+$/, "");
   if (phase === "confirm") {
     if (
-      /^(确认取消|我确认取消|确认取消预约|我确认取消预约|确定取消|确定取消预约|取消预约|confirmcancel|confirmcancellation|iconfirmcancellation|iconfirmcancel|confirmthecancellation|cancelmybooking|cancelthebooking)$/.test(
+      /^(确认取消|我确认取消|确认取消预约|我确认取消预约|确定取消|确定取消预约|取消预约|(?:yes)?(?:i)?confirm(?:the)?(?:cancel|cancellation|cancelation)|(?:yes)?confirmed(?:the)?(?:cancellation|cancelation)|(?:yes)?cancel(?:my|the)booking)$/.test(
         text,
       )
     )
@@ -370,15 +370,9 @@ function choice(
 ): "yes" | "no" | null {
   const digits = form.get("Digits")?.trim() || "";
   const speech = form.get("SpeechResult")?.trim() || "";
-  const confidence = form.get("Confidence")?.trim();
-  const validConfidence =
-    confidence === undefined ||
-    (/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(confidence) &&
-      Number(confidence) >= 0 &&
-      Number(confidence) <= 1);
-  const confident =
-    validConfidence && (confidence === undefined || Number(confidence) >= 0.8);
-  const spoken = speech && validConfidence ? speechChoice(speech, phase) : null;
+  // Confidence is optional ASR metadata, not consent. Only an exact, explicit
+  // phrase can authorize cancellation, on its own distinct confirmation turn.
+  const spoken = speech ? speechChoice(speech, phase) : null;
   const pressed = digits === "1" ? "yes" : digits === "2" ? "no" : null;
   if (digits) {
     if (!pressed) return null;
@@ -387,12 +381,9 @@ function choice(
     if (phase === "attendance") return pressed;
     if (pressed === "no") return spoken === "yes" ? null : "no";
     // Final cancellation requires an unambiguous, separate confirmation.
-    return !speech || (confident && spoken === "yes") ? "yes" : null;
+    return !speech || spoken === "yes" ? "yes" : null;
   }
-  // A low-confidence negative can open the review, but cannot cancel a booking.
-  return spoken && (confident || (phase === "attendance" && spoken === "no"))
-    ? spoken
-    : null;
+  return spoken;
 }
 
 function statusCallback(value: AttendanceCall, form: URLSearchParams): string {

@@ -1,4 +1,4 @@
-export const ATTENDANCE_VERSION = "attendance-input-2";
+export const ATTENDANCE_VERSION = "attendance-input-3";
 
 export function logAttendanceCallback(
   form: URLSearchParams,

@@ -122,7 +122,7 @@ function conversation() {
     );
     assert.equal(
       response.headers.get("x-attendance-version"),
-      "attendance-input-2",
+      "attendance-input-3",
     );
     const xml = await response.text();
     const next = /<Gather\b[^>]*action="([^"]+)"/.exec(xml)?.[1];
@@ -142,7 +142,7 @@ test("signed attendance diagnostics distinguish keypad input and response outcom
   const call = conversation();
   assert.equal((await call.send()).response.status, 200);
   assert.deepEqual(records()[0], {
-    version: "attendance-input-2",
+    version: "attendance-input-3",
     input: "empty",
     digits: "absent",
     speechLength: 0,
@@ -217,6 +217,27 @@ test("speech and mixed input diagnostics retain numeric confidence without priva
     );
   }
 });
+
+for (const confidence of ["0.2", "PRIVATE-CONFIDENCE-FIXTURE"]) {
+  test(`explicit final confirmation cancels while diagnostic confidence ${confidence === "0.2" ? "remains numeric" : "is redacted"}`, async () => {
+    const call = conversation();
+    await call.send();
+    await call.send({ Digits: "2" });
+
+    const result = await call.send({
+      SpeechResult: "confirm cancellation",
+      Confidence: confidence,
+    });
+    assert.equal(result.response.status, 200);
+    assert.match(result.xml, /booking has been cancelled/);
+    assert.equal(result.diagnostic!.version, "attendance-input-3");
+    assert.equal(result.diagnostic!.input, "speech");
+    assert.equal(result.diagnostic!.outcome, "end");
+    assert.equal(result.diagnostic!.confidence, confidence === "0.2" ? 0.2 : null);
+    assert.ok(!printed.join("\n").includes("confirm cancellation"));
+    assert.ok(!printed.join("\n").includes("PRIVATE-CONFIDENCE-FIXTURE"));
+  });
+}
 
 test("status callbacks are labelled without logging their call identifiers", async () => {
   const call = conversation();

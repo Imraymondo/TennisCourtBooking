@@ -642,6 +642,7 @@ for (const speech of [
   "Can I attend",
   "I might attend",
   "I cannot attend?",
+  "confirm cancellation",
   "",
 ]) {
   test(`attendance answer ${JSON.stringify(speech)} preserves the booking`, async (t) => {
@@ -664,6 +665,7 @@ for (const speech of [
   "Maybe cancel",
   "Confirm cancellation but I have not decided",
   "Can you confirm cancellation",
+  "Confirm cancellation if it is free",
   "",
 ]) {
   test(`second-stage ambiguity ${JSON.stringify(speech)} never cancels`, async (t) => {
@@ -706,14 +708,14 @@ test("keeping the reservation at the second question leaves it booked", async (t
 });
 
 const unclearConfirmations: Record<string, string>[] = [
-  { SpeechResult: "Confirm cancellation", Confidence: "0.4" },
-  { SpeechResult: "Confirm cancellation", Confidence: "invalid" },
+  { SpeechResult: "Maybe confirm cancellation", Confidence: "0.4" },
+  { SpeechResult: "Do not confirm cancellation", Confidence: "invalid" },
   { SpeechResult: "Do not cancel", Digits: "1" },
   { SpeechResult: "Confirm cancellation", Digits: "2" },
   { Digits: "11" },
 ];
 for (const extra of unclearConfirmations) {
-  test(`low-confidence or conflicting confirmation ${JSON.stringify(extra)} preserves the booking`, async (t) => {
+  test(`ambiguous or conflicting confirmation ${JSON.stringify(extra)} preserves the booking`, async (t) => {
     const call = await conversation(t);
     call.say();
     call.say("不能来");

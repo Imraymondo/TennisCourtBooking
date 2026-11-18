@@ -217,16 +217,16 @@ test("attendance and cancellation Gathers use Australian English and allow a two
 });
 
 for (const confidence of ["invalid", "-0.1", "1.1", ""]) {
-  test(`signed non-attendance speech with invalid confidence ${JSON.stringify(confidence)} asks again without changing the booking`, async (t) => {
+  test(`signed non-attendance speech with advisory confidence ${JSON.stringify(confidence)} opens review without changing the booking`, async (t) => {
     const call = await conversation(t);
     const original = call.storedBooking();
-    const retry = await call.respond({
+    const review = await call.respond({
       SpeechResult: "I can't attend",
       Confidence: confidence,
     });
 
-    assert.match(retry, /Can you attend\?/);
-    assert.equal(call.storedCall().phase, "attendance");
+    assert.match(review, /Would you like to cancel this booking\?/);
+    assert.equal(call.storedCall().phase, "confirm");
     assert.deepEqual(call.storedBooking(), original);
   });
 }
@@ -271,9 +271,11 @@ const unsafeConfirmations: Record<string, string>[] = [
   { Digits: "1", SpeechResult: "Do not cancel", Confidence: "0.2" },
   { Digits: "1", SpeechResult: "background noise" },
   { Digits: "2", SpeechResult: "Confirm cancellation", Confidence: "0.95" },
-  { SpeechResult: "Confirm cancellation", Confidence: "0.2" },
-  { SpeechResult: "Confirm cancellation", Confidence: "0.79" },
-  { SpeechResult: "Confirm cancellation", Confidence: "invalid" },
+  { Digits: "2", SpeechResult: "Confirm cancellation", Confidence: "0.2" },
+  { Digits: "1", SpeechResult: "Do not cancel", Confidence: "invalid" },
+  { SpeechResult: "Confirm cancellation if it is free", Confidence: "0.95" },
+  { SpeechResult: "Do not confirm cancellation", Confidence: "0.2" },
+  { SpeechResult: "Maybe confirm cancellation", Confidence: "invalid" },
   { SpeechResult: "Confirm cancellation﹖", Confidence: "0.95" },
 ];
 
@@ -288,6 +290,69 @@ for (const fields of unsafeConfirmations) {
     assert.deepEqual(call.storedBooking(), original);
     assert.notEqual(call.storedCall().status, "cancelled");
   });
+}
+
+const confirmationConfidences = [
+  undefined,
+  "0",
+  ".2",
+  ".79",
+  ".8",
+  "1",
+  "",
+  "invalid",
+  "-0.1",
+  "1.1",
+];
+
+for (const confidence of confirmationConfidences) {
+  test(`signed exact cancellation confirmation uses its second turn regardless of advisory confidence ${JSON.stringify(confidence)}`, async (t) => {
+    const call = await conversation(t);
+    const original = call.storedBooking();
+    const attendanceTurn = call.url;
+    const review = await call.respond({ SpeechResult: "I can't attend" });
+    const confirmationTurn = call.url;
+    const fields: Record<string, string> = {
+      SpeechResult: "confirm cancellation",
+    };
+    if (confidence !== undefined) fields.Confidence = confidence;
+
+    assert.notEqual(confirmationTurn, attendanceTurn);
+    assert.equal(call.storedCall().phase, "confirm");
+    assert.deepEqual(call.storedBooking(), original);
+    assert.equal(await call.sendAt(attendanceTurn, fields), review);
+    assert.deepEqual(call.storedBooking(), original);
+
+    const cancelled = await call.respond(fields);
+    assert.equal(call.storedCall().status, "cancelled");
+    assert.equal(call.storedCall().phase, "done");
+    assert.equal(call.storedBooking().status, "cancelled");
+    assert.equal(call.storedBooking().version, original.version + 1);
+
+    assert.equal(await call.sendAt(confirmationTurn, fields), cancelled);
+    assert.equal(call.storedBooking().version, original.version + 1);
+  });
+}
+
+for (const speech of [
+  "yes confirm cancellation",
+  "confirmed cancellation",
+  "I confirm the cancellation",
+]) {
+  for (const confidence of ["0.95", "0.2"]) {
+    test(`signed explicit cancellation variant ${JSON.stringify(speech)} at confidence ${confidence} cancels on its second turn`, async (t) => {
+      const call = await conversation(t);
+      const original = call.storedBooking();
+      await call.respond({ Digits: "2" });
+      assert.equal(call.storedCall().phase, "confirm");
+      assert.deepEqual(call.storedBooking(), original);
+
+      await call.respond({ SpeechResult: speech, Confidence: confidence });
+      assert.equal(call.storedCall().status, "cancelled");
+      assert.equal(call.storedBooking().status, "cancelled");
+      assert.equal(call.storedBooking().version, original.version + 1);
+    });
+  }
 }
 
 test("a signed DTMF 2 cancellation refusal with leftover speech keeps the booking", async (t) => {
@@ -312,7 +377,7 @@ for (const speech of ["press 2", "press two"]) {
   });
 }
 
-test("a signed polite cancellation confirmation only cancels on its second turn with sufficient confidence", async (t) => {
+test("a signed polite cancellation confirmation only cancels on its second turn", async (t) => {
   const call = await conversation(t);
   const original = call.storedBooking();
   await call.respond({ SpeechResult: "Sorry, I can’t attend." });
